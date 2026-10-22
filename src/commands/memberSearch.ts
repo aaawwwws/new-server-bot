@@ -9,6 +9,7 @@ import {
 import { CONTENT_ROLES, findContentRoles } from '../contentRoles.js';
 import { DATA_CENTERS } from '../dataCenters.js';
 import { EXPANSIONS } from '../expansions.js';
+import { fetchAllMembers } from '../guildUtils.js';
 import { JOBS, type JobRole } from '../jobs.js';
 import { describeJobs, describeTime, describeWorld, type Profile } from '../profile.js';
 import { listStoredProfiles } from '../profileStore.js';
@@ -84,7 +85,7 @@ export const execute = async (interaction: ChatInputCommandInteraction<'cached'>
   const hour = options.getInteger('hour');
 
   // 進行度・コンテンツはロールなので、今のメンバーの情報が必要
-  const [profiles, members] = await Promise.all([listStoredProfiles(guild.id), guild.members.fetch()]);
+  const [profiles, members] = await Promise.all([listStoredProfiles(guild.id), fetchAllMembers(guild)]);
   const progressRole = progress ? findProgressRoles(guild).find((role) => role.name === progress) : undefined;
   const contentRole = content ? findContentRoles(guild).find((role) => role.name === content) : undefined;
 

@@ -12,8 +12,9 @@ import {
 } from 'discord.js';
 import { sendLog } from './activityLog.js';
 import { pool } from './db.js';
+import { fetchAllMembers } from './guildUtils.js';
 import { addDays, formatDay, jstDay, weekStart } from './jst.js';
-import { currentMembers, formatNumber } from './levels.js';
+import { formatNumber } from './levels.js';
 import { listPeriodXp } from './levelStore.js';
 
 // 経験値ランキングの掲示板（今日・今週を自動で更新）と、毎週月曜0時の「先週の結果」の投稿
@@ -82,7 +83,7 @@ interface PeriodEntry {
 
 /** from の日から to の日の前日まで（日本時間）のランキング。サーバーにいる人だけで、Botは除く */
 const rankPeriod = async (guild: Guild, from: string, to: string): Promise<PeriodEntry[]> => {
-  const [members, rows] = await Promise.all([currentMembers(guild), listPeriodXp(guild.id, from, to)]);
+  const [members, rows] = await Promise.all([fetchAllMembers(guild), listPeriodXp(guild.id, from, to)]);
   return rows.flatMap((row) => {
     const member = members.get(row.userId);
     return member && !member.user.bot && row.xp > 0 ? [{ member, xp: row.xp }] : [];
@@ -177,7 +178,7 @@ const giveWeeklyRole = async (guild: Guild, winners: GuildMember[]): Promise<str
     if (!role.editable) return `⚠ Botのロールが「${role.name}」より下にあるため、付けられませんでした。`;
 
     const winnerIds = new Set(winners.map((member) => member.id));
-    const members = await currentMembers(guild);
+    const members = await fetchAllMembers(guild);
     for (const member of members.values()) {
       if (member.roles.cache.has(role.id) && !winnerIds.has(member.id)) await member.roles.remove(role, '週間ランキングの付け替え');
     }

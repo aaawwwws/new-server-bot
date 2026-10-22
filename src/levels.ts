@@ -1,5 +1,6 @@
 import { randomInt } from 'node:crypto';
-import type { Client, Collection, Guild, GuildMember, Message, VoiceState } from 'discord.js';
+import type { Client, Guild, GuildMember, Message, VoiceState } from 'discord.js';
+import { fetchAllMembers } from './guildUtils.js';
 import { jstDay } from './jst.js';
 import { addMessageActivity, addVoiceMinute, listLevelStats, type LevelStats } from './levelStore.js';
 
@@ -86,7 +87,7 @@ export interface RankedMember {
 
 /** サーバーにいる人（Botを除く）の記録を多い順に並べる。抜けた人と、まだ記録がない人は入れない */
 export const rankMembers = async (guild: Guild, key: RankingKey = 'xp'): Promise<RankedMember[]> => {
-  const [members, stats] = await Promise.all([currentMembers(guild), listLevelStats(guild.id)]);
+  const [members, stats] = await Promise.all([fetchAllMembers(guild), listLevelStats(guild.id)]);
   return stats
     .flatMap((s) => {
       const member = members.get(s.userId);
@@ -94,7 +95,3 @@ export const rankMembers = async (guild: Guild, key: RankingKey = 'xp'): Promise
     })
     .sort((a, b) => b.stats[key] - a.stats[key] || b.stats.xp - a.stats.xp);
 };
-
-/** サーバーにいる人。全員分が覚えてあればそれを使い、足りなければ Discord から取り直す */
-export const currentMembers = async (guild: Guild): Promise<Collection<string, GuildMember>> =>
-  guild.members.cache.size >= guild.memberCount ? guild.members.cache : guild.members.fetch();

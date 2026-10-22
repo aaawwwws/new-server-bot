@@ -20,6 +20,7 @@ import {
   type ModalSubmitInteraction,
 } from 'discord.js';
 import { sendLog } from '../activityLog.js';
+import { fetchAllMembers } from '../guildUtils.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import { profileLogFields } from '../profile.js';
 import { ADMIN_ROLE_NAME, ensureAdmin } from '../permissions.js';
@@ -248,7 +249,7 @@ const pendingListEmbed = async (interaction: ButtonInteraction<'cached'>): Promi
 
 const unregisteredListEmbed = async (interaction: ButtonInteraction<'cached'>): Promise<EmbedBuilder> => {
   const [members, profiles, pending] = await Promise.all([
-    interaction.guild.members.fetch(),
+    fetchAllMembers(interaction.guild),
     listStoredProfiles(interaction.guild.id),
     listPendingApplications(interaction.guild.id),
   ]);
