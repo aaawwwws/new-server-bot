@@ -1,0 +1,37 @@
+services:
+  bot:
+    build: .
+    env_file: .env
+    environment:
+      # コンテナ内からは「db」という名前でDBにつなぐ（.env の DATABASE_URL は PC 上での開発用）
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      # データはここに残るので、docker compose down しても消えない（down -v で消える）
+      - db-data:/var/lib/postgresql/data
+    ports:
+      # PC 上の npm run dev からつなぐため。127.0.0.1 なので外部からは見えない
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  db-data:
