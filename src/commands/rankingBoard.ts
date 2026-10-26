@@ -6,7 +6,7 @@ import {
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import { sendLog } from '../activityLog.js';
-import { WEEKLY_ROLE_COUNT, WEEKLY_TOP_ROLE_NAME, placeBoard } from '../rankingBoard.js';
+import { MONTHLY_ROLE_COUNT, MONTHLY_TOP_ROLE_NAME, WEEKLY_ROLE_COUNT, WEEKLY_TOP_ROLE_NAME, placeBoard } from '../rankingBoard.js';
 
 export const data = new SlashCommandBuilder()
   .setName('ranking-board')
@@ -28,8 +28,9 @@ export const execute = async (interaction: ChatInputCommandInteraction<'cached'>
   const canManageRoles = interaction.guild.members.me?.permissions.has(PermissionFlagsBits.ManageRoles) ?? false;
   await interaction.editReply(
     [
-      'ランキング掲示板を設置しました。今日・今週の経験値ランキングを5分ごとに更新します。',
-      `毎週月曜0時（日本時間）に先週の結果をこのチャンネルに投稿し、1〜${WEEKLY_ROLE_COUNT}位に「${WEEKLY_TOP_ROLE_NAME}」ロールを付けます（なければ作ります）。`,
+      'ランキング掲示板を設置しました。今日・今週・今月の経験値ランキングを5分ごとに更新します。',
+      `毎週月曜0時（日本時間）に先週の結果をこのチャンネルに投稿し、1〜${WEEKLY_ROLE_COUNT}位に「${WEEKLY_TOP_ROLE_NAME}」ロールを付けます。`,
+      `毎月1日0時に先月の結果を投稿し、${MONTHLY_ROLE_COUNT === 1 ? '1位' : `1〜${MONTHLY_ROLE_COUNT}位`}に「${MONTHLY_TOP_ROLE_NAME}」ロールを付けます（ロールはなければ作ります）。`,
       ...(replaced ? ['前の掲示板は削除しました（1サーバーに1つです）。'] : []),
       ...(canManageRoles ? [] : ['⚠ Botにロールの管理権限がないため、このままではロールを付けられません。']),
     ].join('\n'),

@@ -205,6 +205,17 @@ export const listActiveRecruits = async (guildId?: string): Promise<Recruit[]> =
   return rows.map(toRecruit);
 };
 
+/** 終わった募集（中止は除く）。from〜to は開始時刻の範囲（null ならそこで区切らない）。主催・参加の回数のランキングに使う */
+export const listFinishedRecruits = async (guildId: string, from: Date | null, to: Date | null): Promise<Recruit[]> => {
+  const { rows } = await pool.query<RecruitRow>(
+    `SELECT ${COLUMNS} FROM recruits
+      WHERE guild_id = $1 AND status = 'finished'
+        AND ($2::timestamptz IS NULL OR starts_at >= $2) AND ($3::timestamptz IS NULL OR starts_at < $3)`,
+    [guildId, from, to],
+  );
+  return rows.map(toRecruit);
+};
+
 // ---- 作成途中の募集（下書き）
 
 export interface RecruitDraft extends RecruitConfig {

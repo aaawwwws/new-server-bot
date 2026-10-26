@@ -1,10 +1,10 @@
 import { randomInt } from 'node:crypto';
-import type { Client, Guild, GuildMember, Message, VoiceState } from 'discord.js';
-import { fetchAllMembers } from './guildUtils.js';
+import type { Client, Guild, Message, VoiceState } from 'discord.js';
 import { jstDay } from './jst.js';
-import { addMessageActivity, addVoiceMinute, listLevelStats, type LevelStats } from './levelStore.js';
+import { addMessageActivity, addVoiceMinute } from './levelStore.js';
+import { applyBoost, boostPercent } from './xpBoost.js';
 
-// 経験値（XP）の貯まり方。数字を変えれば、貯まる速さを調整できる
+// 経験値（XP）の貯まり方。数字を変えれば、貯まる速さを調整できる（XPアップ期間中は、ここに倍率がかかる）
 /** 発言1回でもらえるXP（この範囲でランダム） */
 export const MESSAGE_XP_MIN = 15;
 export const MESSAGE_XP_MAX = 25;
@@ -49,7 +49,8 @@ export const handleMessageXp = async (message: Message): Promise<void> => {
   const now = Date.now();
   const earns = now - (lastMessageXpAt.get(key) ?? 0) >= MESSAGE_XP_COOLDOWN_MS;
   if (earns) lastMessageXpAt.set(key, now);
-  await addMessageActivity(message.guildId, message.author.id, earns ? randomInt(MESSAGE_XP_MIN, MESSAGE_XP_MAX + 1) : 0, jstDay());
+  const xp = earns ? applyBoost(randomInt(MESSAGE_XP_MIN, MESSAGE_XP_MAX + 1), boostPercent(message.guildId)) : 0;
+  await addMessageActivity(message.guildId, message.author.id, xp, jstDay());
 };
 
 /**
@@ -71,27 +72,10 @@ export const voiceXpEarners = (guild: Guild): string[] => {
 export const startVoiceXp = (client: Client<true>): void => {
   setInterval(() => {
     for (const guild of client.guilds.cache.values()) {
-      addVoiceMinute(guild.id, voiceXpEarners(guild), VOICE_XP_PER_MINUTE, jstDay()).catch((error: unknown) => {
+      const xp = applyBoost(VOICE_XP_PER_MINUTE, boostPercent(guild.id));
+      addVoiceMinute(guild.id, voiceXpEarners(guild), xp, jstDay()).catch((error: unknown) => {
         console.error(`「${guild.name}」のVCのXPを保存できませんでした:`, error);
       });
     }
   }, VOICE_TICK_MS).unref();
-};
-
-export type RankingKey = 'xp' | 'messageCount' | 'voiceMinutes';
-
-export interface RankedMember {
-  member: GuildMember;
-  stats: LevelStats;
-}
-
-/** サーバーにいる人（Botを除く）の記録を多い順に並べる。抜けた人と、まだ記録がない人は入れない */
-export const rankMembers = async (guild: Guild, key: RankingKey = 'xp'): Promise<RankedMember[]> => {
-  const [members, stats] = await Promise.all([fetchAllMembers(guild), listLevelStats(guild.id)]);
-  return stats
-    .flatMap((s) => {
-      const member = members.get(s.userId);
-      return member && !member.user.bot && s[key] > 0 ? [{ member, stats: s }] : [];
-    })
-    .sort((a, b) => b.stats[key] - a.stats[key] || b.stats.xp - a.stats.xp);
 };

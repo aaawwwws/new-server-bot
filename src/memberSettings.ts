@@ -36,6 +36,33 @@ export const loadJoinAnnounceOrDefault = (guildId: string, userId: string): Prom
     return { ...DEFAULT_JOIN_ANNOUNCE };
   });
 
+// ランキングに名前を出すか（出さない人もXPは貯まる。順位には入らず、週間・月間のロールも付かない）
+
+export const loadRankingHidden = async (guildId: string, userId: string): Promise<boolean> => {
+  const { rows } = await pool.query<{ hide_from_ranking: boolean }>(
+    'SELECT hide_from_ranking FROM member_settings WHERE guild_id = $1 AND user_id = $2',
+    [guildId, userId],
+  );
+  return rows[0]?.hide_from_ranking ?? false;
+};
+
+export const saveRankingHidden = async (guildId: string, userId: string, hidden: boolean): Promise<void> => {
+  await pool.query(
+    `INSERT INTO member_settings (guild_id, user_id, hide_from_ranking) VALUES ($1, $2, $3)
+     ON CONFLICT (guild_id, user_id) DO UPDATE SET hide_from_ranking = EXCLUDED.hide_from_ranking, updated_at = now()`,
+    [guildId, userId, hidden],
+  );
+};
+
+/** ランキングに出ない設定の人 */
+export const listRankingHiddenIds = async (guildId: string): Promise<Set<string>> => {
+  const { rows } = await pool.query<{ user_id: string }>(
+    'SELECT user_id FROM member_settings WHERE guild_id = $1 AND hide_from_ranking',
+    [guildId],
+  );
+  return new Set(rows.map((row) => row.user_id));
+};
+
 export const saveJoinAnnounce = async (guildId: string, userId: string, key: JoinAnnounceKey, value: boolean): Promise<void> => {
   // 列名は上の決まった値だけなので、そのまま埋め込んでよい
   const column = COLUMNS[key];

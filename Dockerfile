@@ -10,6 +10,8 @@ RUN npm run build
 # ---- 実行（本番用の依存とビルド結果だけを入れる）
 FROM node:22-alpine
 ENV NODE_ENV=production
+# レベルの画像カードに日本語と絵文字を描くためのフォント
+RUN apk add --no-cache font-noto-cjk font-noto-emoji
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force

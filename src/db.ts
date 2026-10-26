@@ -66,6 +66,8 @@ export const initDatabase = async (): Promise<void> => {
       PRIMARY KEY (guild_id, user_id)
     )
   `);
+  // ランキングに名前を出さない設定（XPは貯まるが、順位には入らない）
+  await pool.query('ALTER TABLE member_settings ADD COLUMN IF NOT EXISTS hide_from_ranking boolean NOT NULL DEFAULT false');
 
   // レベル（経験値）。xp は発言とVCで貯まった合計。message_count は発言の数、voice_minutes はXPになったVCの時間（分）
   await pool.query(`
@@ -90,13 +92,52 @@ export const initDatabase = async (): Promise<void> => {
       PRIMARY KEY (guild_id, day, user_id)
     )
   `);
-  // ランキング掲示板（1サーバーに1つ）。last_weekly_post はどの週（その週の月曜）の結果まで投稿したか
+  // 日ごとの発言の数と、XPになったVCの時間（分）。期間ごとの発言数・VCのランキングと、連続日数に使う
+  for (const column of ['message_count integer NOT NULL DEFAULT 0', 'voice_minutes integer NOT NULL DEFAULT 0']) {
+    await pool.query(`ALTER TABLE level_daily_xp ADD COLUMN IF NOT EXISTS ${column}`);
+  }
+  // ランキング掲示板（1サーバーに1つ）。last_weekly_post はどの週（その週の月曜）、last_monthly_post はどの月（1日）の結果まで投稿したか
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ranking_boards (
       guild_id         text PRIMARY KEY,
       channel_id       text NOT NULL,
       message_id       text NOT NULL,
       last_weekly_post date
+    )
+  `);
+  await pool.query('ALTER TABLE ranking_boards ADD COLUMN IF NOT EXISTS last_monthly_post date');
+  // 週・月が終わったときの結果（上位の人）。歴代記録と自己ベストに使う。ranking_periods はどの期間を記録し終えたか
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ranking_periods (
+      guild_id     text        NOT NULL,
+      period       text        NOT NULL,
+      period_start date        NOT NULL,
+      recorded_at  timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (guild_id, period, period_start)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ranking_results (
+      guild_id     text    NOT NULL,
+      period       text    NOT NULL,
+      period_start date    NOT NULL,
+      rank         integer NOT NULL,
+      user_id      text    NOT NULL,
+      xp           bigint  NOT NULL,
+      PRIMARY KEY (guild_id, period, period_start, rank)
+    )
+  `);
+  // XPアップ期間（管理者が決めた期間だけ、もらえるXPを増やす）。percent は倍率（200 なら2倍）
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS xp_boosts (
+      id         bigserial   PRIMARY KEY,
+      guild_id   text        NOT NULL,
+      label      text        NOT NULL DEFAULT '',
+      percent    integer     NOT NULL,
+      starts_at  timestamptz NOT NULL,
+      ends_at    timestamptz NOT NULL,
+      created_by text        NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
     )
   `);
 

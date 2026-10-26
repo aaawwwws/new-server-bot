@@ -36,6 +36,22 @@ export const weekStart = (day: string): string => {
   return addDays(day, -((weekday + 6) % 7));
 };
 
+/** その日を含む月の1日 */
+export const monthStart = (day: string): string => `${day.slice(0, 8)}01`;
+
+/** 「2026-10-01」の n か月後の1日（マイナスなら前） */
+export const addMonths = (day: string, n: number): string => {
+  const [year = 0, month = 1] = day.split('-').map(Number);
+  const index = year * 12 + (month - 1) + n;
+  return `${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, '0')}-01`;
+};
+
+/** 「2026年10月」 */
+export const formatMonth = (day: string): string => {
+  const [year = 0, month = 1] = day.split('-').map(Number);
+  return `${year}年${month}月`;
+};
+
 /** 「10/22（木）」 */
 export const formatDay = (day: string): string => {
   const { month, day: date, weekday } = toJst(dayStart(day));
@@ -55,7 +71,7 @@ export const formatFullDateTime = (date: Date): string => {
 };
 
 /** その日の 0:00（日本時間） */
-const dayStart = (day: string): Date => {
+export const dayStart = (day: string): Date => {
   const [year = 0, month = 1, date = 1] = day.split('-').map(Number);
   return fromJst(year, month, date);
 };

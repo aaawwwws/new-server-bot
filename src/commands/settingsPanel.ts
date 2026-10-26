@@ -9,6 +9,7 @@ import {
   ModalBuilder,
   SlashCommandBuilder,
   UserSelectMenuBuilder,
+  type AttachmentBuilder,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type GuildMember,
@@ -22,8 +23,7 @@ import { NOTICE_CHANNEL_NAME } from '../callNotice.js';
 import { checkCharacterName } from '../characterName.js';
 import { findContentRoles, toggleContentRole } from '../contentRoles.js';
 import { DATA_CENTERS, type DataCenter } from '../dataCenters.js';
-import type { RankingKey } from '../levels.js';
-import { loadJoinAnnounce, saveJoinAnnounce, type JoinAnnounceKey, type JoinAnnounceSettings } from '../memberSettings.js';
+import { loadJoinAnnounce, loadRankingHidden, saveJoinAnnounce, type JoinAnnounceKey, type JoinAnnounceSettings } from '../memberSettings.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import { buildProfileEmbed, describeJobs, describeTime, describeWorld, type Profile } from '../profile.js';
 import {
@@ -54,9 +54,10 @@ import {
   refreshPostedProfile,
 } from '../profilePublish.js';
 import { findProgressRoles, setProgressRole } from '../progressRoles.js';
+import { toRankingKind } from '../rankings.js';
+import { levelScreenButtons, rankingScreen, screenPayload, setRankingHidden } from '../rankingView.js';
 import { VC_ROLE_NAME, findVcRole, setVcNotice } from '../vcRole.js';
-import { buildLevelEmbed } from './level.js';
-import { RANKINGS, buildRankingEmbed, toRankingKey } from './ranking.js';
+import { buildLevelView } from './level.js';
 
 // customId は「settings:<操作>:<値>」の形。
 // 選んでいる途中の値（ジョブ・活動時間）はBotに持たず、画面のボタン・セレクトメニューから読むので、再起動しても続きから操作できる
@@ -164,7 +165,8 @@ export const buildPanel = (): PanelPayload => {
         '自分がVCに入ったときにBotがお知らせするかを切り替えられます。',
         '',
         '**📊 レベル**',
-        '自分やほかの人のレベルと、サーバーのランキングを見られます。',
+        '自分やほかの人のレベル、サーバーのランキング（今日・今週・今月・累計）、自分の順位と歴代記録を見られます。',
+        'ランキングに名前を出さない設定もここでできます。',
       ].join('\n'),
     )
     .setColor(0x5865f2);
@@ -219,11 +221,19 @@ export const handleComponent = async (interaction: ComponentInteraction): Promis
       // 選んだ人がもうサーバーにいなければ null
       const userId = interaction.isUserSelectMenu() ? interaction.values[0] : undefined;
       const target = userId ? await interaction.guild.members.fetch(userId).catch(() => null) : null;
-      await interaction.editReply({ embeds: [], ...(await levelScreen(interaction.member, target)) });
+      await interaction.editReply(withFiles(await levelScreen(interaction.member, target)));
+      return;
+    }
+    case 'rank-hide': {
+      const hidden = value === 'on';
+      await setRankingHidden(interaction.member, hidden);
+      const note = hidden ? '🙈 ランキングに出ないようにしました。' : '🙋 ランキングに出るようにしました。';
+      await interaction.editReply(withFiles(await levelScreen(interaction.member, interaction.member, note)));
       return;
     }
     case 'ranking':
-      await interaction.editReply({ embeds: [], ...(await rankingScreen(interaction.member, toRankingKey(value))) });
+      // 前の形の画面（ランキングを設定パネルの中で出していた頃）に残っているボタン
+      await interaction.editReply(screenPayload(await rankingScreen(interaction.member, toLegacyKind(value), 'all', 0)));
       return;
     case 'dcs':
       await interaction.editReply(dataCenterScreen(null));
@@ -381,9 +391,10 @@ const openItem = async (interaction: ComponentInteraction, item: string | undefi
  * パネルからの操作なら、新しく本人にだけ見える画面を出す（パネル自体は書き換えない）
  */
 const show = async (interaction: ComponentInteraction, screen: Screen): Promise<void> => {
-  const payload = { content: screen.content, embeds: screen.embeds ?? [], components: screen.components };
+  const payload = { content: screen.content, embeds: screen.embeds ?? [], components: screen.components, files: screen.files ?? [] };
   if (interaction.message.flags.has(MessageFlags.Ephemeral)) {
-    await interaction.update(payload);
+    // 前の画面に付いていた画像（レベルのカード）は外す
+    await interaction.update({ ...payload, attachments: [] });
   } else {
     await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
   }
@@ -399,9 +410,17 @@ const showAfterDefer = async (interaction: ComponentInteraction, build: () => Pr
   } else {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   }
-  const screen = await build();
-  await interaction.editReply({ content: screen.content, embeds: screen.embeds ?? [], components: screen.components });
+  await interaction.editReply(withFiles(await build()));
 };
+
+/** 画面の中身。前の画面に付いていた画像は外し、この画面の画像（あれば）を付ける */
+const withFiles = (screen: Screen) => ({
+  content: screen.content,
+  embeds: screen.embeds ?? [],
+  components: screen.components,
+  files: screen.files ?? [],
+  attachments: [],
+});
 
 /** 変更後や、変更できないときに出す「一覧に戻る」ボタン */
 const backButton = (): ButtonBuilder =>
@@ -527,6 +546,8 @@ interface Screen {
   content: string;
   embeds?: EmbedBuilder[];
   components: Row[];
+  /** レベルの画像カード */
+  files?: AttachmentBuilder[];
 }
 
 const progressScreen = (member: GuildMember): Screen => ({
@@ -579,36 +600,41 @@ const vcScreen = (member: GuildMember, settings: JoinAnnounceSettings, note?: st
   };
 };
 
-/** レベルの画面。下のメニューでほかの人を選ぶと、その人のレベルに切り替わる。target が null ならサーバーにいない人 */
-const levelScreen = async (viewer: GuildMember, target: GuildMember | null): Promise<Screen> => {
+/**
+ * レベルの画面。下のメニューでほかの人を選ぶと、その人のレベルに切り替わる。target が null ならサーバーにいない人。
+ * 自分の画面には、ランキングに名前を出すかの切り替えも出す
+ */
+const levelScreen = async (viewer: GuildMember, target: GuildMember | null, note?: string): Promise<Screen> => {
+  const own = target?.id === viewer.id;
+  const hidden = own && (await loadRankingHidden(viewer.guild.id, viewer.id));
   const components = [
     toRow(new UserSelectMenuBuilder().setCustomId(LEVEL_USER_SELECT_ID).setPlaceholder('ほかの人のレベルを見る')),
     toRow(
-      new ButtonBuilder().setCustomId(customId('ranking', 'xp')).setLabel('ランキング').setEmoji({ name: '🏆' }).setStyle(ButtonStyle.Primary),
-      ...(target?.id === viewer.id ? [] : [myLevelButton()]),
+      ...levelScreenButtons(),
+      own
+        ? new ButtonBuilder()
+            .setCustomId(customId('rank-hide', hidden ? 'off' : 'on'))
+            .setLabel(hidden ? 'ランキングに出す' : 'ランキングに出さない')
+            .setEmoji({ name: hidden ? '🙋' : '🙈' })
+            .setStyle(ButtonStyle.Secondary)
+        : myLevelButton(),
     ),
   ];
   if (!target || target.user.bot) {
     return { content: target ? 'Botにはレベルがありません。' : 'そのメンバーはサーバーにいません。', components };
   }
+  const view = await buildLevelView(target);
   return {
-    content: target.id === viewer.id ? '📊 **あなたのレベル**' : `📊 **${target.displayName} さんのレベル**`,
-    embeds: [await buildLevelEmbed(target)],
+    content: [...(note ? [note] : []), own ? '📊 **あなたのレベル**' : `📊 **${target.displayName} さんのレベル**`].join('\n'),
+    embeds: view.embeds,
+    files: view.files,
     components,
   };
 };
 
-/** ランキングの画面。種類のボタンで切り替える（今の種類を青く表示する） */
-const rankingScreen = async (viewer: GuildMember, key: RankingKey): Promise<Screen> => ({
-  content: '',
-  embeds: [await buildRankingEmbed(viewer.guild, viewer.id, key)],
-  components: [
-    toRow(...RANKING_KEYS.map((k) => toggleButton(customId('ranking', k), RANKINGS[k].label, k === key))),
-    toRow(myLevelButton()),
-  ],
-});
-
-const RANKING_KEYS: RankingKey[] = ['xp', 'messageCount', 'voiceMinutes'];
+/** 前の形のランキングの種類（messageCount / voiceMinutes） */
+const toLegacyKind = (value: string | undefined) =>
+  value === 'messageCount' ? 'messages' : value === 'voiceMinutes' ? 'voice' : toRankingKind(value);
 
 const myLevelButton = (): ButtonBuilder =>
   new ButtonBuilder().setCustomId(LEVEL_MENU_ID).setLabel('自分のレベル').setEmoji({ name: '📊' }).setStyle(ButtonStyle.Secondary);

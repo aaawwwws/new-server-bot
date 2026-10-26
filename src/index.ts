@@ -45,12 +45,14 @@ import { handleMemberLeave } from './memberLifecycle.js';
 import { handleAuditLogEntry } from './moderationLog.js';
 import { refreshPanels } from './panelRefresh.js';
 import { startRankingBoards } from './rankingBoard.js';
+import * as rankingView from './rankingView.js';
 import { refreshActiveRecruits, startRecruitScheduler } from './recruitMessage.js';
 import { ADMIN_ROLE_NAME, ensureAdmin, ensureAdminRole, logCommand } from './permissions.js';
 import * as profileReview from './profileReview.js';
 import { VC_ROLE_NAME, ensureVcRole } from './vcRole.js';
 import { handleVoiceStateUpdate } from './voiceJoinNotice.js';
 import * as voiceStatus from './voiceStatus.js';
+import { startBoostCache } from './xpBoost.js';
 
 const commands = [
   progressPanel,
@@ -125,7 +127,8 @@ client.once(Events.ClientReady, async (readyClient) => {
     });
   }
 
-  // VCにいる人へ、1分ごとに経験値を配る
+  // XPアップ期間を読み込み（1分ごとに読み直す）、VCにいる人へ1分ごとに経験値を配る
+  startBoostCache(readyClient);
   startVoiceXp(readyClient);
   // 1分ごとに、開始が近い募集のお知らせと、終わった募集の片付けをする（Botが止まっていた間の分も、ここでまとめて行う）
   startRecruitScheduler(readyClient);
@@ -133,7 +136,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   await refreshActiveRecruits(readyClient).catch((error: unknown) => {
     console.error('募集の投稿を書き換えられませんでした:', error);
   });
-  // ランキング掲示板を5分ごとに書き換え、月曜0時に先週の結果を投稿する
+  // ランキング掲示板を5分ごとに書き換え、月曜0時に先週・1日0時に先月の結果を投稿する（結果は歴代記録にも残す）
   startRankingBoards(readyClient);
   // 古い発言・ログの記録を消す（起動時と、そのあと6時間ごと）
   startLogRetention();
@@ -240,6 +243,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await recruitPanel.handleComponent(interaction);
     } else if (interaction.isModalSubmit() && interaction.customId.startsWith(recruitPanel.CUSTOM_ID_PREFIX)) {
       await recruitPanel.handleModalSubmit(interaction);
+    } else if (interaction.isButton() && interaction.customId.startsWith(rankingView.CUSTOM_ID_PREFIX)) {
+      await rankingView.handleButton(interaction);
     } else if (interaction.isButton() && interaction.customId.startsWith(voiceStatus.CUSTOM_ID_PREFIX)) {
       await voiceStatus.handleButton(interaction);
     } else if (interaction.isModalSubmit() && interaction.customId.startsWith(voiceStatus.CUSTOM_ID_PREFIX)) {

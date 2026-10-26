@@ -21,12 +21,26 @@ import {
 } from 'discord.js';
 import { sendLog } from '../activityLog.js';
 import { fetchAllMembers } from '../guildUtils.js';
+import { formatShortDateTime } from '../jst.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import { profileLogFields } from '../profile.js';
 import { ADMIN_ROLE_NAME, ensureAdmin } from '../permissions.js';
 import { MEMBER_ROLE_NAME, PROFILE_CHANNEL_NAME, findMemberRole } from '../profilePublish.js';
 import { deleteProfile, findStoredProfile, listPendingApplications, listStoredProfiles } from '../profileStore.js';
 import { CSV_LIMIT, LIST_LIMIT, LOG_SEARCH_TYPES, describeFilter, toSearchType, type LogSearchFilter } from '../logSearch.js';
+import {
+  BOOST_HOURS,
+  BOOST_PERCENTS,
+  activeBoost,
+  createBoost,
+  describeBoostPeriod,
+  formatHours,
+  formatPercent,
+  listBoosts,
+  parseBoostStart,
+  stopBoost,
+  type XpBoost,
+} from '../xpBoost.js';
 import { replyWithSearch } from './logSearch.js';
 import { openAdminRegisterModal } from './profilePanel.js';
 
@@ -39,6 +53,17 @@ const DELETE_BUTTON_ID = `${CUSTOM_ID_PREFIX}delete`;
 const DELETE_MODAL_ID = `${CUSTOM_ID_PREFIX}delete-submit`;
 const LOG_SEARCH_BUTTON_ID = `${CUSTOM_ID_PREFIX}log-search`;
 const LOG_SEARCH_MODAL_ID = `${CUSTOM_ID_PREFIX}log-search-submit`;
+const BOOST_BUTTON_ID = `${CUSTOM_ID_PREFIX}boost`;
+const BOOST_NEW_BUTTON_ID = `${CUSTOM_ID_PREFIX}boost-new`;
+/** 「止める」ボタン（後ろにXPアップのIDが付く） */
+const BOOST_STOP_PREFIX = `${CUSTOM_ID_PREFIX}boost-stop:`;
+const BOOST_MODAL_ID = `${CUSTOM_ID_PREFIX}boost-submit`;
+const BOOST_PERCENT_INPUT_ID = 'boostPercent';
+const BOOST_START_INPUT_ID = 'boostStart';
+const BOOST_HOURS_INPUT_ID = 'boostHours';
+const BOOST_LABEL_INPUT_ID = 'boostLabel';
+/** XPアップの画面に並べる「止める」ボタンの数（1行に収まる数） */
+const MAX_BOOST_BUTTONS = 5;
 const MEMBER_INPUT_ID = 'member';
 const MEMBER_ROLE_INPUT_ID = 'memberRole';
 const REASON_INPUT_ID = 'reason';
@@ -104,6 +129,8 @@ export const buildPanel = (): PanelPayload => {
         `メンバーを選んで、プロフィールと「${PROFILE_CHANNEL_NAME}」の投稿を削除します。`,
         '**🔎 ログ検索**',
         '残しておいた行動ログ・発言・VCの出入りを、人・期間・キーワードで探します（一覧かCSV）。',
+        '**⚡ XPアップ**',
+        '期間を決めて、発言とVCでもらえるXPを1.5〜3倍にします（予約もできます）。',
       ].join('\n'),
     )
     .setColor(0x99aab5);
@@ -114,7 +141,10 @@ export const buildPanel = (): PanelPayload => {
     panelButton(LOG_SEARCH_BUTTON_ID, 'ログ検索', '🔎', ButtonStyle.Secondary),
     panelButton(DELETE_BUTTON_ID, 'プロフィールを削除', '🗑️', ButtonStyle.Danger),
   );
-  return { embeds: [embed], components: [row] };
+  const secondRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    panelButton(BOOST_BUTTON_ID, 'XPアップ', '⚡', ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [row, secondRow] };
 };
 
 export const handleButton = async (interaction: ButtonInteraction<'cached'>): Promise<void> => {
@@ -140,6 +170,16 @@ export const handleButton = async (interaction: ButtonInteraction<'cached'>): Pr
     case LOG_SEARCH_BUTTON_ID:
       await interaction.showModal(logSearchModal());
       return;
+    case BOOST_BUTTON_ID:
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      await interaction.editReply(await boostScreen(interaction.guild.id));
+      return;
+    case BOOST_NEW_BUTTON_ID:
+      await interaction.showModal(boostModal());
+      return;
+  }
+  if (interaction.customId.startsWith(BOOST_STOP_PREFIX)) {
+    await stopBoostFromButton(interaction, interaction.customId.slice(BOOST_STOP_PREFIX.length));
   }
 };
 
@@ -152,7 +192,135 @@ export const handleModalSubmit = async (interaction: ModalSubmitInteraction<'cac
     case LOG_SEARCH_MODAL_ID:
       await searchFromModal(interaction);
       return;
+    case BOOST_MODAL_ID:
+      await createBoostFromModal(interaction);
+      return;
   }
+};
+
+// ---- XPアップ
+
+/** 開催中・これからのXPアップの一覧と、新しく設定する・止めるボタン。note は操作の結果 */
+const boostScreen = async (guildId: string, note?: string) => {
+  const now = new Date();
+  const boosts = await listBoosts(guildId, now);
+  const active = activeBoost(guildId, now);
+  const embed = new EmbedBuilder()
+    .setTitle('⚡ XPアップ')
+    .setColor(0xf1c40f)
+    .setDescription(
+      [
+        ...(note ? [note, ''] : []),
+        '期間中は、発言とVCでもらえるXPが増えます（重なっているときは倍率の大きい方）。',
+        'ランキング掲示板・レベル・ランキングの画面にも出ます。',
+        '',
+        ...(boosts.length === 0
+          ? ['今は設定されていません。']
+          : boosts.map((boost) => `${isRunning(boost, now) ? '🟢 開催中' : '⏳ 予定'} ${describeBoostPeriod(boost)}`)),
+        ...(active ? ['', `今の倍率: **${formatPercent(active.percent)}**`] : []),
+      ].join('\n'),
+    );
+  const stopButtons = boosts.slice(0, MAX_BOOST_BUTTONS).map((boost) =>
+    new ButtonBuilder()
+      .setCustomId(`${BOOST_STOP_PREFIX}${boost.id}`)
+      .setLabel(`止める: ${formatPercent(boost.percent)} ${boost.label || `${formatShortDateTime(boost.startsAt)}〜`}`.slice(0, 80))
+      .setStyle(ButtonStyle.Danger),
+  );
+  return {
+    embeds: [embed],
+    components: [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(panelButton(BOOST_NEW_BUTTON_ID, '新しく設定', '➕', ButtonStyle.Primary)),
+      ...(stopButtons.length > 0 ? [new ActionRowBuilder<ButtonBuilder>().addComponents(stopButtons)] : []),
+    ],
+  };
+};
+
+const isRunning = (boost: XpBoost, now: Date): boolean => boost.startsAt <= now && now < boost.endsAt;
+
+/** 「新しく設定」のモーダルの送信。読めない開始時刻は、理由を画面に出す */
+const createBoostFromModal = async (interaction: ModalSubmitInteraction<'cached'>): Promise<void> => {
+  if (interaction.isFromMessage()) {
+    await interaction.deferUpdate();
+  } else {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  }
+  const now = new Date();
+  const percent = Number(interaction.fields.getStringSelectValues(BOOST_PERCENT_INPUT_ID)[0]);
+  const hours = Number(interaction.fields.getStringSelectValues(BOOST_HOURS_INPUT_ID)[0]);
+  const start = parseBoostStart(interaction.fields.getTextInputValue(BOOST_START_INPUT_ID), now);
+  const label = interaction.fields.getTextInputValue(BOOST_LABEL_INPUT_ID).trim();
+  if (!BOOST_PERCENTS.includes(percent) || !BOOST_HOURS.includes(hours)) {
+    await interaction.editReply(await boostScreen(interaction.guild.id, '⚠ 倍率と長さを選び直してください。'));
+    return;
+  }
+  if (typeof start === 'string') {
+    await interaction.editReply(await boostScreen(interaction.guild.id, `⚠ ${start}`));
+    return;
+  }
+
+  const boost = await createBoost({
+    guildId: interaction.guild.id,
+    label,
+    percent,
+    startsAt: start,
+    endsAt: new Date(start.getTime() + hours * 60 * 60_000),
+    createdBy: interaction.user.id,
+  });
+  await interaction.editReply(await boostScreen(interaction.guild.id, `✅ XPアップを設定しました: ${describeBoostPeriod(boost)}`));
+  void sendLog(interaction.guild, 'level', `${interaction.member} がXPアップ（${formatPercent(percent)}）を設定しました`, interaction.member, {
+    title: 'XPアップの設定',
+    fields: [
+      { name: '⚡ 倍率', value: formatPercent(percent), inline: true },
+      { name: '🕘 期間', value: `${formatShortDateTime(boost.startsAt)}〜${formatShortDateTime(boost.endsAt)}（${formatHours(hours)}）`, inline: true },
+      ...(label ? [{ name: '🏷️ 名前', value: label, inline: true }] : []),
+    ],
+  });
+};
+
+const stopBoostFromButton = async (interaction: ButtonInteraction<'cached'>, id: string): Promise<void> => {
+  await interaction.deferUpdate();
+  const stopped = /^\d+$/.test(id) ? await stopBoost(interaction.guild.id, id) : null;
+  if (!stopped) {
+    await interaction.editReply(await boostScreen(interaction.guild.id, 'そのXPアップはもう終わっています。'));
+    return;
+  }
+  await interaction.editReply(await boostScreen(interaction.guild.id, `🛑 XPアップを止めました: ${describeBoostPeriod(stopped)}`));
+  void sendLog(interaction.guild, 'level', `${interaction.member} がXPアップ（${formatPercent(stopped.percent)}）を止めました`, interaction.member, {
+    title: 'XPアップの停止',
+    fields: [{ name: '⚡ 止めたもの', value: describeBoostPeriod(stopped), inline: true }],
+  });
+};
+
+const boostModal = (): ModalBuilder => {
+  const select = (id: string, options: { label: string; value: string; default?: boolean }[]) =>
+    new StringSelectMenuBuilder().setCustomId(id).setRequired(true).addOptions(options);
+  return new ModalBuilder()
+    .setCustomId(BOOST_MODAL_ID)
+    .setTitle('XPアップを設定')
+    .addLabelComponents(
+      new LabelBuilder()
+        .setLabel('倍率')
+        .setStringSelectMenuComponent(
+          select(BOOST_PERCENT_INPUT_ID, BOOST_PERCENTS.map((percent) => ({ label: formatPercent(percent), value: String(percent), default: percent === 200 }))),
+        ),
+      new LabelBuilder()
+        .setLabel('開始（任意）')
+        .setDescription('空欄なら今すぐ。例: 10/31 20:00（日本時間）')
+        .setTextInputComponent(
+          new TextInputBuilder().setCustomId(BOOST_START_INPUT_ID).setStyle(TextInputStyle.Short).setMaxLength(20).setRequired(false).setPlaceholder('10/31 20:00'),
+        ),
+      new LabelBuilder()
+        .setLabel('長さ')
+        .setStringSelectMenuComponent(
+          select(BOOST_HOURS_INPUT_ID, BOOST_HOURS.map((hours) => ({ label: formatHours(hours), value: String(hours), default: hours === 24 }))),
+        ),
+      new LabelBuilder()
+        .setLabel('名前（任意）')
+        .setDescription('掲示板やレベルの表示に出ます')
+        .setTextInputComponent(
+          new TextInputBuilder().setCustomId(BOOST_LABEL_INPUT_ID).setStyle(TextInputStyle.Short).setMaxLength(30).setRequired(false).setPlaceholder('ハロウィン'),
+        ),
+    );
 };
 
 /** 「ログ検索」のモーダルの送信。管理者が何を探したかもログに残す */
