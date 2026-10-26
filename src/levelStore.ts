@@ -5,6 +5,10 @@ export interface LevelStats {
   xp: number;
   messageCount: number;
   voiceMinutes: number;
+  /** リアクションをした回数（同じメッセージへは1回） */
+  reactionsGiven: number;
+  /** リアクションをもらった回数（同じ人から同じメッセージへは1回） */
+  reactionsReceived: number;
 }
 
 interface LevelRow {
@@ -12,7 +16,11 @@ interface LevelRow {
   xp: string;
   message_count: number | string;
   voice_minutes: number | string;
+  reactions_given: number | string;
+  reactions_received: number | string;
 }
+
+const STATS_COLUMNS = 'user_id, xp, message_count, voice_minutes, reactions_given, reactions_received';
 
 // bigint や合計（sum）は文字列で返ってくるので数値にする（XPが Number の上限を超えることはない）
 const toStats = (row: LevelRow): LevelStats => ({
@@ -20,6 +28,8 @@ const toStats = (row: LevelRow): LevelStats => ({
   xp: Number(row.xp),
   messageCount: Number(row.message_count),
   voiceMinutes: Number(row.voice_minutes),
+  reactionsGiven: Number(row.reactions_given),
+  reactionsReceived: Number(row.reactions_received),
 });
 
 /** 発言を1回数え、xp を足す（連投の間は 0）。day はその日（日本時間） */
@@ -58,10 +68,63 @@ export const addVoiceMinute = async (guildId: string, userIds: string[], xp: num
   );
 };
 
-/** from の日から to の日の前日まで（日本時間）の、人ごとの XP・発言数・VCの時間 */
+/**
+ * リアクション1つを記録する。同じ人が同じメッセージに付けたものは、絵文字を変えても・付け直しても1回だけ（初めてなら true）
+ */
+export const recordReaction = async (guildId: string, messageId: string, userId: string): Promise<boolean> => {
+  const { rowCount } = await pool.query(
+    'INSERT INTO reaction_xp (guild_id, message_id, user_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+    [guildId, messageId, userId],
+  );
+  return rowCount === 1;
+};
+
+/**
+ * リアクションを「した」「もらった」を1回数え、その日の limit 回目までは xp を足す。実際に足したXPを返す。
+ * 上限を超えても回数は数える
+ */
+export const addReactionActivity = async (
+  guildId: string,
+  userId: string,
+  side: 'given' | 'received',
+  xp: number,
+  limit: number,
+  day: string,
+): Promise<number> => {
+  // 列名は決まった2つだけなので、そのまま埋め込んでよい
+  const column = side === 'given' ? 'reactions_given' : 'reactions_received';
+  const { rows } = await pool.query<{ count: number }>(
+    `INSERT INTO level_daily_xp (guild_id, day, user_id, xp, ${column}) VALUES ($1, $2::date, $3, $4, 1)
+     ON CONFLICT (guild_id, day, user_id) DO UPDATE
+       SET xp = level_daily_xp.xp + CASE WHEN level_daily_xp.${column} < $5 THEN EXCLUDED.xp ELSE 0 END,
+           ${column} = level_daily_xp.${column} + 1
+     RETURNING ${column} AS count`,
+    [guildId, day, userId, xp, limit],
+  );
+  const earned = (rows[0]?.count ?? limit + 1) <= limit ? xp : 0;
+  await pool.query(
+    `INSERT INTO member_levels (guild_id, user_id, xp, ${column}) VALUES ($1, $2, $3, 1)
+     ON CONFLICT (guild_id, user_id) DO UPDATE
+       SET xp = member_levels.xp + EXCLUDED.xp, ${column} = member_levels.${column} + 1, updated_at = now()`,
+    [guildId, userId, earned],
+  );
+  return earned;
+};
+
+/** XPにしたリアクションを覚えておく日数（これより古いメッセージに付け直すと、もう一度数えることになるが、ほぼ起きない） */
+export const REACTION_RETENTION_DAYS = 90;
+
+export const deleteOldReactions = async (now: Date = new Date()): Promise<number> => {
+  const limit = new Date(now.getTime() - REACTION_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+  const { rowCount } = await pool.query('DELETE FROM reaction_xp WHERE created_at < $1', [limit]);
+  return rowCount ?? 0;
+};
+
+/** from の日から to の日の前日まで（日本時間）の、人ごとの XP・発言数・VCの時間・リアクションの回数 */
 export const listPeriodStats = async (guildId: string, from: string, to: string): Promise<LevelStats[]> => {
   const { rows } = await pool.query<LevelRow>(
-    `SELECT user_id, sum(xp) AS xp, sum(message_count) AS message_count, sum(voice_minutes) AS voice_minutes
+    `SELECT user_id, sum(xp) AS xp, sum(message_count) AS message_count, sum(voice_minutes) AS voice_minutes,
+            sum(reactions_given) AS reactions_given, sum(reactions_received) AS reactions_received
        FROM level_daily_xp
       WHERE guild_id = $1 AND day >= $2::date AND day < $3::date
       GROUP BY user_id`,
@@ -73,7 +136,7 @@ export const listPeriodStats = async (guildId: string, from: string, to: string)
 /** サーバーの全員分（抜けた人も含む。順位を出すときにサーバーにいる人だけに絞る） */
 export const listLevelStats = async (guildId: string): Promise<LevelStats[]> => {
   const { rows } = await pool.query<LevelRow>(
-    'SELECT user_id, xp, message_count, voice_minutes FROM member_levels WHERE guild_id = $1',
+    `SELECT ${STATS_COLUMNS} FROM member_levels WHERE guild_id = $1`,
     [guildId],
   );
   return rows.map(toStats);
@@ -82,11 +145,11 @@ export const listLevelStats = async (guildId: string): Promise<LevelStats[]> => 
 /** 1人分の合計（まだ記録がなければ全部 0） */
 export const findLevelStats = async (guildId: string, userId: string): Promise<LevelStats> => {
   const { rows } = await pool.query<LevelRow>(
-    'SELECT user_id, xp, message_count, voice_minutes FROM member_levels WHERE guild_id = $1 AND user_id = $2',
+    `SELECT ${STATS_COLUMNS} FROM member_levels WHERE guild_id = $1 AND user_id = $2`,
     [guildId, userId],
   );
   const [row] = rows;
-  return row ? toStats(row) : { userId, xp: 0, messageCount: 0, voiceMinutes: 0 };
+  return row ? toStats(row) : { userId, xp: 0, messageCount: 0, voiceMinutes: 0, reactionsGiven: 0, reactionsReceived: 0 };
 };
 
 export interface Streak {
@@ -98,7 +161,8 @@ export interface Streak {
 }
 
 /**
- * 連続日数（発言かVCがあった日が何日続いているか）。user を渡すとその人だけ。
+ * 連続日数（発言・VC・リアクションをした日が何日続いているか）。user を渡すとその人だけ。
+ * リアクションをもらっただけの日は、来ていない日として数える（前の形の記録は発言・VCのXPだけなので、xp で見る）。
  * 続いている日の並びは「日付 − 何日目か」が同じになるので、それでまとめて数える
  */
 const queryStreaks = async (guildId: string, today: string, userId: string | null): Promise<Streak[]> => {
@@ -106,7 +170,7 @@ const queryStreaks = async (guildId: string, today: string, userId: string | nul
     `WITH days AS (
        SELECT user_id, day FROM level_daily_xp
         WHERE guild_id = $1 AND day <= $2::date AND ($3::text IS NULL OR user_id = $3)
-          AND (xp > 0 OR message_count > 0 OR voice_minutes > 0)
+          AND (message_count > 0 OR voice_minutes > 0 OR reactions_given > 0 OR (xp > 0 AND reactions_received = 0))
      ), runs AS (
        SELECT user_id, day, day - (row_number() OVER (PARTITION BY user_id ORDER BY day))::int AS run FROM days
      ), streaks AS (

@@ -8,6 +8,7 @@ import {
   MessageFlags,
   Partials,
   RESTJSONErrorCodes,
+  type GatewayMessageReactionAddDispatchData,
   type GatewayVoiceChannelStatusUpdateDispatchData,
   type Guild,
   type Interaction,
@@ -39,7 +40,8 @@ import * as recruitPanel from './commands/recruitPanel.js';
 import * as settingsPanel from './commands/settingsPanel.js';
 import { closeDatabase, initDatabase } from './db.js';
 import { findUsedInvite, handleInviteCreate, handleInviteDelete, loadInvites } from './inviteTracker.js';
-import { handleMessageXp, startVoiceXp } from './levels.js';
+import { handleMessageXp, handleReactionXp, startVoiceXp } from './levels.js';
+import { deleteOldReactions } from './levelStore.js';
 import { deleteOldLogs } from './logStore.js';
 import { handleMemberLeave } from './memberLifecycle.js';
 import { handleAuditLogEntry } from './moderationLog.js';
@@ -103,6 +105,8 @@ const client = new Client({
     GatewayIntentBits.GuildModeration,
     // どの招待リンクで入ったかを調べるため（招待リンクの作成・削除を受け取る）
     GatewayIntentBits.GuildInvites,
+    // リアクションでXPを貯めるため（特権インテントではないので、Developer Portal での設定は要らない）
+    GatewayIntentBits.GuildMessageReactions,
   ],
   // Bot が覚えていない（起動前からいる）メンバーが抜けたときや、起動前のメッセージが消された・編集されたときも、イベントを受け取るため
   partials: [Partials.GuildMember, Partials.Message],
@@ -138,13 +142,16 @@ client.once(Events.ClientReady, async (readyClient) => {
   });
   // ランキング掲示板を5分ごとに書き換え、月曜0時に先週・1日0時に先月の結果を投稿する（結果は歴代記録にも残す）
   startRankingBoards(readyClient);
-  // 古い発言・ログの記録を消す（起動時と、そのあと6時間ごと）
+  // 古い発言・ログ・リアクションの記録を消す（起動時と、そのあと6時間ごと）
   startLogRetention();
 });
 
 const LOG_RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const startLogRetention = (): void => {
   const run = () => {
+    deleteOldReactions().catch((error: unknown) => {
+      console.error('古いリアクションの記録を消せませんでした:', error);
+    });
     deleteOldLogs().catch((error: unknown) => {
       console.error('古い記録を消せませんでした:', error);
     });
@@ -274,6 +281,13 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
 // VCステータスがDiscord側で変わったとき（VCの画面から変えた、誰もいなくなって消えた など）
 client.ws.on(GatewayDispatchEvents.VoiceChannelStatusUpdate, (data: GatewayVoiceChannelStatusUpdateDispatchData) => {
   voiceStatus.trackVoiceStatus(data);
+});
+
+// リアクションでのXP（付けられたメッセージを書いた人が要るので、届いたままの形で受け取る）
+client.ws.on(GatewayDispatchEvents.MessageReactionAdd, (data: GatewayMessageReactionAddDispatchData) => {
+  handleReactionXp(client, data).catch((error: unknown) => {
+    console.error('リアクションのXPを保存できませんでした:', error);
+  });
 });
 
 client.on(Events.GuildMemberAdd, (member) => {

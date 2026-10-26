@@ -13,7 +13,7 @@ import { MESSAGE_XP_COOLDOWN_MS, formatNumber, levelFromXp } from '../levels.js'
 import { findLevelStats, findStreak } from '../levelStore.js';
 import { loadRankingHidden } from '../memberSettings.js';
 import { renderRankCard } from '../rankCard.js';
-import { computeRanking } from '../rankings.js';
+import { computeRanking, isRankingExempt } from '../rankings.js';
 import { describeBoost } from '../xpBoost.js';
 
 const PROGRESS_BAR_LENGTH = 10;
@@ -67,8 +67,9 @@ export const buildLevelView = async (member: GuildMember, now: Date = new Date()
   const rankIndex = total.entries.findIndex((entry) => entry.member.id === member.id);
   const weekIndex = week.entries.findIndex((entry) => entry.member.id === member.id);
   const weekXp = week.entries[weekIndex]?.value ?? 0;
-  // ランキングに出ない設定の人は、ほかの人が見ても順位を出さない
-  const rank = hidden ? '非表示' : rankIndex >= 0 ? `${rankIndex + 1}位` : '—';
+  // ランキングに出ない設定の人と管理者は、ほかの人が見ても順位を出さない
+  const exempt = isRankingExempt(member);
+  const rank = exempt ? '対象外' : hidden ? '非表示' : rankIndex >= 0 ? `${rankIndex + 1}位` : '—';
   const voice = stats.voiceMinutes > 0 ? formatDuration(stats.voiceMinutes * 60_000) : '0分';
 
   const card = await renderRankCard({
@@ -101,7 +102,13 @@ export const buildLevelView = async (member: GuildMember, now: Date = new Date()
     .addFields(
       {
         name: '🏆 順位',
-        value: hidden ? '非表示（ランキングに出ない設定）' : rankIndex >= 0 ? `${rankIndex + 1}位 / ${total.entries.length}人` : 'まだありません',
+        value: exempt
+          ? '対象外（管理者）'
+          : hidden
+            ? '非表示（ランキングに出ない設定）'
+            : rankIndex >= 0
+              ? `${rankIndex + 1}位 / ${total.entries.length}人`
+              : 'まだありません',
         inline: true,
       },
       { name: '✨ 累計XP', value: `${formatNumber(stats.xp)} XP`, inline: true },
@@ -110,12 +117,17 @@ export const buildLevelView = async (member: GuildMember, now: Date = new Date()
       { name: '🎧 VC', value: voice, inline: true },
       {
         name: '🗓️ 今週',
-        value: `${formatNumber(weekXp)} XP${!hidden && weekIndex >= 0 ? `（${weekIndex + 1}位）` : ''}`,
+        value: `${formatNumber(weekXp)} XP${!hidden && !exempt && weekIndex >= 0 ? `（${weekIndex + 1}位）` : ''}`,
+        inline: true,
+      },
+      {
+        name: '👍 リアクション',
+        value: `した ${formatNumber(stats.reactionsGiven)}回・もらった ${formatNumber(stats.reactionsReceived)}回`,
         inline: true,
       },
     )
     .setFooter({
-      text: `XPは発言（${MESSAGE_XP_COOLDOWN_MS / 60_000}分に1回）と、2人以上いるVC（ミュート中は除く）で貯まります`,
+      text: `XPは発言（${MESSAGE_XP_COOLDOWN_MS / 60_000}分に1回）、2人以上いるVC（ミュート中は除く）、リアクション（した・もらった）で貯まります`,
     });
   if (card) embed.setImage(`attachment://${CARD_FILE_NAME}`);
   return { embeds: [embed], files: card ? [new AttachmentBuilder(card, { name: CARD_FILE_NAME })] : [] };

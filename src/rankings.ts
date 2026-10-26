@@ -5,14 +5,15 @@ import { addDays, addMonths, dayStart, formatDay, formatMonth, jstDay, monthStar
 import { formatNumber, levelFromXp } from './levels.js';
 import { listLevelStats, listPeriodStats, listStreaks, type LevelStats } from './levelStore.js';
 import { listRankingHiddenIds } from './memberSettings.js';
+import { ADMIN_ROLE_NAME } from './permissions.js';
 import { listFinishedRecruits } from './recruitStore.js';
 
 // ランキングの中身（何を・どの期間で数えるか、順位、昨日からの変化）と、1行ぶんの書き方
 
-export type RankingKind = 'xp' | 'messages' | 'voice' | 'streak' | 'hosted' | 'joined';
+export type RankingKind = 'xp' | 'messages' | 'voice' | 'reactions' | 'streak' | 'hosted' | 'joined';
 export type RankingPeriod = 'day' | 'week' | 'month' | 'all';
 
-export const RANKING_KINDS: RankingKind[] = ['xp', 'messages', 'voice', 'streak', 'hosted', 'joined'];
+export const RANKING_KINDS: RankingKind[] = ['xp', 'messages', 'voice', 'reactions', 'streak', 'hosted', 'joined'];
 export const RANKING_PERIODS: RankingPeriod[] = ['day', 'week', 'month', 'all'];
 
 /** periods: 期間で区切れるか（連続日数は「今」だけ） */
@@ -20,6 +21,7 @@ export const KIND_INFO: Record<RankingKind, { label: string; emoji: string; peri
   xp: { label: 'XP', emoji: '✨', periods: true },
   messages: { label: '発言数', emoji: '💬', periods: true },
   voice: { label: 'VCの時間', emoji: '🎧', periods: true },
+  reactions: { label: 'もらったリアクション', emoji: '💖', periods: true },
   streak: { label: '連続日数', emoji: '🔥', periods: false },
   hosted: { label: '募集の主催', emoji: '📣', periods: true },
   joined: { label: '募集の参加', emoji: '🙋', periods: true },
@@ -93,9 +95,14 @@ interface Score {
   tie: number;
 }
 type Scores = Map<string, Score>;
-type StatKind = 'xp' | 'messages' | 'voice';
+type StatKind = 'xp' | 'messages' | 'voice' | 'reactions';
 
-const STAT_FIELDS: Record<StatKind, keyof Omit<LevelStats, 'userId'>> = { xp: 'xp', messages: 'messageCount', voice: 'voiceMinutes' };
+const STAT_FIELDS: Record<StatKind, keyof Omit<LevelStats, 'userId'>> = {
+  xp: 'xp',
+  messages: 'messageCount',
+  voice: 'voiceMinutes',
+  reactions: 'reactionsReceived',
+};
 const isStatKind = (kind: RankingKind): kind is StatKind => kind in STAT_FIELDS;
 
 const statScores = (stats: LevelStats[], kind: StatKind): Scores =>
@@ -124,7 +131,7 @@ const loadScores = async (guildId: string, kind: RankingKind, range: DayRange | 
 
 /**
  * 昨日の時点の値（今の値から今日の分を引いたもの）。
- * 比べないとき（今日のランキング・期間の初日・XP／発言数／VC以外）は null
+ * 比べないとき（今日のランキング・期間の初日・XP／発言数／VC／もらったリアクション以外）は null
  */
 const previousScores = async (guildId: string, kind: RankingKind, period: RankingPeriod, range: DayRange | null, today: string, current: Scores): Promise<Scores | null> => {
   if (!isStatKind(kind) || period === 'day' || range?.from === today) return null;
@@ -137,12 +144,15 @@ const previousScores = async (guildId: string, kind: RankingKind, period: Rankin
   );
 };
 
-/** サーバーにいる人（Botと、ランキングに出ない人を除く）を、多い順に。値が 0 の人は入れない */
+/** 「管理者」ロールの人はランキングに入れない（XPは貯まる。週間・月間のロールも付かない） */
+export const isRankingExempt = (member: GuildMember): boolean => member.roles.cache.some((role) => role.name === ADMIN_ROLE_NAME);
+
+/** サーバーにいる人（Bot・ランキングに出ない人・管理者を除く）を、多い順に。値が 0 の人は入れない */
 const order = (members: Collection<string, GuildMember>, hidden: Set<string>, scores: Scores, alsoInclude?: string): [GuildMember, Score][] =>
   [...scores]
     .flatMap(([userId, score]): [GuildMember, Score][] => {
       const member = members.get(userId);
-      const visible = !hidden.has(userId) || userId === alsoInclude;
+      const visible = userId === alsoInclude || (!hidden.has(userId) && !(member && isRankingExempt(member)));
       return member && !member.user.bot && visible && score.value > 0 ? [[member, score]] : [];
     })
     .sort(([a, x], [b, y]) => y.value - x.value || y.tie - x.tie || a.id.localeCompare(b.id));
@@ -150,7 +160,7 @@ const order = (members: Collection<string, GuildMember>, hidden: Set<string>, sc
 export interface RankingOptions {
   /** 昨日からの変化を出すか（出さなければ少し速い） */
   changes?: boolean;
-  /** ランキングに出ない設定でも、この人は入れる（本人が自分の順位を見るとき） */
+  /** ランキングに出ない設定・管理者でも、この人は入れる（本人が自分の順位を見るとき） */
   alsoInclude?: string;
 }
 

@@ -1,7 +1,8 @@
 import { randomInt } from 'node:crypto';
-import type { Client, Guild, Message, VoiceState } from 'discord.js';
+import type { Client, GatewayMessageReactionAddDispatchData, Guild, Message, VoiceState } from 'discord.js';
+import { fetchAllMembers } from './guildUtils.js';
 import { jstDay } from './jst.js';
-import { addMessageActivity, addVoiceMinute } from './levelStore.js';
+import { addMessageActivity, addReactionActivity, addVoiceMinute, recordReaction } from './levelStore.js';
 import { applyBoost, boostPercent } from './xpBoost.js';
 
 // 経験値（XP）の貯まり方。数字を変えれば、貯まる速さを調整できる（XPアップ期間中は、ここに倍率がかかる）
@@ -12,6 +13,14 @@ export const MESSAGE_XP_MAX = 25;
 export const MESSAGE_XP_COOLDOWN_MS = 60_000;
 /** VCに1分いるともらえるXP（2人以上いるVCで、ミュートしていないとき） */
 export const VOICE_XP_PER_MINUTE = 5;
+/** 配信（画面共有）している人が、1分ごとに上乗せでもらえるXP */
+export const STREAM_BONUS_PER_MINUTE = 3;
+/** リアクションを付けるともらえるXPと、XPになる1日の回数 */
+export const REACTION_GIVE_XP = 3;
+export const REACTION_GIVE_DAILY_LIMIT = 10;
+/** リアクションをもらうともらえるXP（1人から1回）と、XPになる1日の回数 */
+export const REACTION_RECEIVE_XP = 5;
+export const REACTION_RECEIVE_DAILY_LIMIT = 20;
 const VOICE_TICK_MS = 60_000;
 
 /** そのレベルから次のレベルに上がるのに要るXP。レベルが上がるほど多く要る */
@@ -54,8 +63,29 @@ export const handleMessageXp = async (message: Message): Promise<void> => {
 };
 
 /**
+ * リアクションでXPを貯める。付けた人と、付けられたメッセージを書いた人の両方に入る（それぞれ1日の上限まで）。
+ * 同じメッセージへは、絵文字を変えても・付け直しても1人1回だけ。外しても減らさない。
+ * 自分の投稿へのリアクション、Botのリアクション、Bot・Webhook・抜けた人の投稿へのリアクションは数えない。
+ * discord.js は付けられたメッセージを書いた人を教えてくれないので、Discordから届いたままの形で受け取る
+ */
+export const handleReactionXp = async (client: Client, data: GatewayMessageReactionAddDispatchData): Promise<void> => {
+  const { guild_id: guildId, message_author_id: authorId, user_id: userId } = data;
+  if (!guildId || !authorId || authorId === userId || data.member?.user.bot) return;
+  const guild = client.guilds.cache.get(guildId);
+  if (!guild) return;
+  const author = (await fetchAllMembers(guild)).get(authorId);
+  if (!author || author.user.bot) return;
+  if (!(await recordReaction(guildId, data.message_id, userId))) return;
+
+  const percent = boostPercent(guildId);
+  const day = jstDay();
+  await addReactionActivity(guildId, userId, 'given', applyBoost(REACTION_GIVE_XP, percent), REACTION_GIVE_DAILY_LIMIT, day);
+  await addReactionActivity(guildId, authorId, 'received', applyBoost(REACTION_RECEIVE_XP, percent), REACTION_RECEIVE_DAILY_LIMIT, day);
+};
+
+/**
  * 今VCでXPをもらえる人。2人以上いるVCで、ミュート・スピーカーミュートしていない人（AFKチャンネルとBotは除く）。
- * ミュートしている人も、人数には数える
+ * ミュートしている人も、人数には数える。配信（画面共有）している人は、ミュート中でももらえる
  */
 export const voiceXpEarners = (guild: Guild): string[] => {
   const byChannel = new Map<string, VoiceState[]>();
@@ -65,17 +95,27 @@ export const voiceXpEarners = (guild: Guild): string[] => {
   }
   return [...byChannel.values()]
     .filter((states) => states.length >= 2)
-    .flatMap((states) => states.filter((state) => !state.mute && !state.deaf).map((state) => state.id));
+    .flatMap((states) => states.filter((state) => state.streaming || (!state.mute && !state.deaf)).map((state) => state.id));
 };
 
-/** 1分ごとに、VCにいる人へXPを配る */
+/** 1分ごとに、VCにいる人へXPを配る（配信している人には上乗せ） */
 export const startVoiceXp = (client: Client<true>): void => {
   setInterval(() => {
     for (const guild of client.guilds.cache.values()) {
-      const xp = applyBoost(VOICE_XP_PER_MINUTE, boostPercent(guild.id));
-      addVoiceMinute(guild.id, voiceXpEarners(guild), xp, jstDay()).catch((error: unknown) => {
+      giveVoiceXp(guild).catch((error: unknown) => {
         console.error(`「${guild.name}」のVCのXPを保存できませんでした:`, error);
       });
     }
   }, VOICE_TICK_MS).unref();
+};
+
+/** 1分ぶんのVCのXPを配る */
+export const giveVoiceXp = async (guild: Guild): Promise<void> => {
+  const percent = boostPercent(guild.id);
+  const earners = voiceXpEarners(guild);
+  const streaming = earners.filter((id) => guild.voiceStates.cache.get(id)?.streaming);
+  const others = earners.filter((id) => !streaming.includes(id));
+  const day = jstDay();
+  await addVoiceMinute(guild.id, others, applyBoost(VOICE_XP_PER_MINUTE, percent), day);
+  await addVoiceMinute(guild.id, streaming, applyBoost(VOICE_XP_PER_MINUTE + STREAM_BONUS_PER_MINUTE, percent), day);
 };

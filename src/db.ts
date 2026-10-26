@@ -96,6 +96,22 @@ export const initDatabase = async (): Promise<void> => {
   for (const column of ['message_count integer NOT NULL DEFAULT 0', 'voice_minutes integer NOT NULL DEFAULT 0']) {
     await pool.query(`ALTER TABLE level_daily_xp ADD COLUMN IF NOT EXISTS ${column}`);
   }
+  // リアクションを「した」「もらった」回数（合計と日ごと）。日ごとの回数は、その日にXPをもらえる上限に使う
+  for (const table of ['member_levels', 'level_daily_xp']) {
+    for (const column of ['reactions_given integer NOT NULL DEFAULT 0', 'reactions_received integer NOT NULL DEFAULT 0']) {
+      await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column}`);
+    }
+  }
+  // XPにしたリアクション（同じ人が同じメッセージに付けたものは、絵文字を変えても1回だけ数えるため）
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reaction_xp (
+      guild_id   text        NOT NULL,
+      message_id text        NOT NULL,
+      user_id    text        NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (guild_id, message_id, user_id)
+    )
+  `);
   // ランキング掲示板（1サーバーに1つ）。last_weekly_post はどの週（その週の月曜）、last_monthly_post はどの月（1日）の結果まで投稿したか
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ranking_boards (

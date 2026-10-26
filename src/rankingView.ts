@@ -20,6 +20,7 @@ import {
   RANKING_PERIODS,
   computeRanking,
   describeRange,
+  isRankingExempt,
   formatGap,
   formatScore,
   rankingLine,
@@ -47,9 +48,9 @@ const COLOR = 0xf1c40f;
 const HALL_OF_FAME_WEEKS = 8;
 const HALL_OF_FAME_MONTHS = 6;
 const WIN_COUNT_LIMIT = 5;
-/** 種類のボタンの並び（1行に3つずつ） */
+/** 種類のボタンの並び（1行目が発言・VCまわり、2行目がそのほか） */
 const KIND_ROWS: RankingKind[][] = [
-  ['xp', 'messages', 'voice'],
+  ['xp', 'messages', 'voice', 'reactions'],
   ['streak', 'hosted', 'joined'],
 ];
 const PERIOD_EMOJIS: Record<RankingPeriod, string> = { day: '📅', week: '🗓️', month: '🌙', all: '🏆' };
@@ -128,8 +129,9 @@ export const setRankingHidden = async (member: GuildMember, hidden: boolean): Pr
 
 /** 種類ごとの、数え方の説明 */
 const KIND_NOTES: Partial<Record<RankingKind, string>> = {
-  voice: '2人以上いるVCで、ミュートしていなかった時間',
-  streak: '発言かVCがあった日が続いている日数（今日まだでも、昨日まで続いていれば途切れていない扱い）',
+  voice: '2人以上いるVCで、ミュートしていなかった時間（配信中はミュートでも数えます）',
+  reactions: '同じ人から同じメッセージへのリアクションは1回。自分の投稿へのリアクションとBotのリアクションは数えません',
+  streak: '発言・VC・リアクションをした日が続いている日数（今日まだでも、昨日まで続いていれば途切れていない扱い）',
   hosted: '終わった募集だけを数えます（中止は数えません）',
   joined: '終わった募集で、枠に入っていた回数（待ちと中止は数えません）',
 };
@@ -157,7 +159,8 @@ export const rankingScreen = async (
   const shown = entries.slice(first, first + PAGE_SIZE).map((_, i) => line(first + i));
   // 自分がこのページにいなければ、自分の前後を下に出す
   const around = myIndex >= 0 && !onPage ? [myIndex - 1, myIndex, myIndex + 1].filter((i) => i >= 0 && i < entries.length).map(line) : [];
-  const hidden = myIndex < 0 && (await loadRankingHidden(viewer.guild.id, viewer.id));
+  const excluded = myIndex < 0 && isRankingExempt(viewer);
+  const hidden = myIndex < 0 && !excluded && (await loadRankingHidden(viewer.guild.id, viewer.id));
   const boost = kind === 'xp' ? describeBoost(viewer.guild.id, now) : null;
   const showsChanges = entries.some((entry) => entry.change !== null);
 
@@ -172,7 +175,7 @@ export const rankingScreen = async (
         ...(entries.length === 0 ? ['まだ記録がありません。'] : shown),
         ...(around.length > 0 ? ['', '**あなたの周り**', ...around] : []),
         '',
-        myStatus(ranking, myIndex, hidden),
+        excluded ? 'あなたは「管理者」ロールがあるので、ランキングには入りません（XPは貯まっています）。' : myStatus(ranking, myIndex, hidden),
         ...(boost ? ['', boost] : []),
       ].join('\n'),
     )
@@ -231,7 +234,7 @@ export const myRanksScreen = async (viewer: GuildMember, note?: string, now: Dat
   const { guild } = viewer;
   // ランキングに出ない設定でも、本人には「出した場合の順位」を見せる
   const options = { changes: false, alsoInclude: viewer.id };
-  const statKinds: RankingKind[] = ['xp', 'messages', 'voice'];
+  const statKinds: RankingKind[] = ['xp', 'messages', 'voice', 'reactions'];
   const [hidden, byPeriod, streakRanking, streak, hosted, joined] = await Promise.all([
     loadRankingHidden(guild.id, viewer.id),
     Promise.all(RANKING_PERIODS.map((period) => Promise.all(statKinds.map((kind) => computeRanking(guild, kind, period, now, options))))),
@@ -255,9 +258,11 @@ export const myRanksScreen = async (viewer: GuildMember, note?: string, now: Dat
     .setDescription(
       [
         ...(note ? [note, ''] : []),
-        hidden
-          ? '🙈 **ランキングに出ない設定中**です。ほかの人が見るランキングには出ていません（ここの順位は、出した場合の順位です）。'
-          : '各ランキングでの、今のあなたの順位です。',
+        isRankingExempt(viewer)
+          ? '🛠️ 「管理者」ロールがあるので、ランキングには入りません（ここの順位は、入った場合の順位です）。'
+          : hidden
+            ? '🙈 **ランキングに出ない設定中**です。ほかの人が見るランキングには出ていません（ここの順位は、出した場合の順位です）。'
+            : '各ランキングでの、今のあなたの順位です。',
         ...(boost ? ['', boost] : []),
       ].join('\n'),
     )
@@ -274,7 +279,7 @@ export const myRanksScreen = async (viewer: GuildMember, note?: string, now: Dat
       },
       { name: '📣 PT募集（累計）', value: `主催 ${place(hosted)}\n参加 ${place(joined)}`, inline: true },
     )
-    .setFooter({ text: '✨XP・💬発言数・🎧VCの時間。順位は「ランキングに出ない」設定の人を除いて数えています' });
+    .setFooter({ text: '✨XP・💬発言数・🎧VCの時間・💖もらったリアクション。順位は「ランキングに出ない」設定の人と管理者を除いて数えています' });
 
   return {
     content: '',
