@@ -8,6 +8,9 @@ dist/
 .env
 .env.*
 !.env.example
+# DBのバックアップ（個人情報を含むので、リポジトリに入れない）
+backups/
+
 # logs
 *.log
 npm-debug.log*

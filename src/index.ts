@@ -25,6 +25,7 @@ import {
   recordMessage,
   sendLog,
 } from './activityLog.js';
+import { startAdminReports } from './adminReport.js';
 import { handleCallStateUpdate } from './callNotice.js';
 import * as adminPanel from './commands/adminPanel.js';
 import * as contentPanel from './commands/contentPanel.js';
@@ -39,6 +40,8 @@ import * as recruitList from './commands/recruitList.js';
 import * as recruitPanel from './commands/recruitPanel.js';
 import * as settingsPanel from './commands/settingsPanel.js';
 import { closeDatabase, initDatabase } from './db.js';
+import { reportError, setErrorReportClient } from './errorReporter.js';
+import { loadAllGuildSettings } from './guildSettings.js';
 import { findUsedInvite, handleInviteCreate, handleInviteDelete, loadInvites } from './inviteTracker.js';
 import { handleMessageXp, handleReactionXp, startVoiceXp } from './levels.js';
 import { deleteOldReactions } from './levelStore.js';
@@ -49,7 +52,7 @@ import { refreshPanels } from './panelRefresh.js';
 import { startRankingBoards } from './rankingBoard.js';
 import * as rankingView from './rankingView.js';
 import { refreshActiveRecruits, startRecruitScheduler } from './recruitMessage.js';
-import { ADMIN_ROLE_NAME, ensureAdmin, ensureAdminRole, logCommand } from './permissions.js';
+import { ADMIN_ROLE_NAME, ensureAdmin, ensureAdminRole, interactionLabel, logCommand } from './permissions.js';
 import * as profileReview from './profileReview.js';
 import { VC_ROLE_NAME, ensureVcRole } from './vcRole.js';
 import { handleVoiceStateUpdate } from './voiceJoinNotice.js';
@@ -114,12 +117,14 @@ const client = new Client({
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`ログインしました: ${readyClient.user.tag}`);
+  // ここから先のエラーは「ログ」チャンネルにも知らせる
+  setErrorReportClient(readyClient);
 
   try {
     await readyClient.application.commands.set(commands.map((command) => command.data.toJSON()));
     console.log('スラッシュコマンドを登録しました');
   } catch (error) {
-    console.error('スラッシュコマンドの登録に失敗しました:', error);
+    reportError('スラッシュコマンドの登録に失敗しました', error);
   }
 
   // Botが使う「管理者」「VC」ロールと「ログ」チャンネルを、ないサーバーでは作っておく。
@@ -127,33 +132,36 @@ client.once(Events.ClientReady, async (readyClient) => {
   for (const guild of readyClient.guilds.cache.values()) {
     await prepareGuild(guild);
     await refreshPanels(guild).catch((error: unknown) => {
-      console.error(`「${guild.name}」のパネルを作り直せませんでした:`, error);
+      reportError(`「${guild.name}」のパネルを作り直せませんでした`, error, guild);
     });
   }
 
-  // XPアップ期間を読み込み（1分ごとに読み直す）、VCにいる人へ1分ごとに経験値を配る
+  // XPを入れないチャンネルとXPアップ期間を読み込み（XPアップは1分ごとに読み直す）、VCにいる人へ1分ごとに経験値を配る
+  await loadAllGuildSettings(readyClient);
   startBoostCache(readyClient);
   startVoiceXp(readyClient);
   // 1分ごとに、開始が近い募集のお知らせと、終わった募集の片付けをする（Botが止まっていた間の分も、ここでまとめて行う）
   startRecruitScheduler(readyClient);
   // 続いている募集の投稿と募集一覧を、今のBotの形に書き換える
   await refreshActiveRecruits(readyClient).catch((error: unknown) => {
-    console.error('募集の投稿を書き換えられませんでした:', error);
+    reportError('募集の投稿を書き換えられませんでした', error);
   });
   // ランキング掲示板を5分ごとに書き換え、月曜0時に先週・1日0時に先月の結果を投稿する（結果は歴代記録にも残す）
   startRankingBoards(readyClient);
   // 古い発言・ログ・リアクションの記録を消す（起動時と、そのあと6時間ごと）
   startLogRetention();
+  // 毎週月曜9時に先週の管理レポートを「ログ」チャンネルに出し、DBのバックアップが作られ続けているかを見張る
+  startAdminReports(readyClient);
 });
 
 const LOG_RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const startLogRetention = (): void => {
   const run = () => {
     deleteOldReactions().catch((error: unknown) => {
-      console.error('古いリアクションの記録を消せませんでした:', error);
+      reportError('古いリアクションの記録を消せませんでした', error);
     });
     deleteOldLogs().catch((error: unknown) => {
-      console.error('古い記録を消せませんでした:', error);
+      reportError('古い記録を消せませんでした', error);
     });
   };
   run();
@@ -169,15 +177,15 @@ client.on(Events.GuildCreate, (guild) => {
 const prepareGuild = async (guild: Guild): Promise<void> => {
   // ロールはログチャンネルを見られる人の設定に使うので、先に作る
   const adminRole = await ensureAdminRole(guild).catch((error: unknown) => {
-    console.error(`「${guild.name}」に「${ADMIN_ROLE_NAME}」ロールを作れませんでした:`, error);
+    reportError(`「${guild.name}」に「${ADMIN_ROLE_NAME}」ロールを作れませんでした`, error, guild);
     return null;
   });
   const logChannel = await ensureLogChannel(guild).catch((error: unknown) => {
-    console.error(`「${guild.name}」に「${LOG_CHANNEL_NAME}」チャンネルを作れませんでした:`, error);
+    reportError(`「${guild.name}」に「${LOG_CHANNEL_NAME}」チャンネルを作れませんでした`, error, guild);
     return null;
   });
   const vcRole = await ensureVcRole(guild).catch((error: unknown) => {
-    console.error(`「${guild.name}」に「${VC_ROLE_NAME}」ロールを作れませんでした:`, error);
+    reportError(`「${guild.name}」に「${VC_ROLE_NAME}」ロールを作れませんでした`, error, guild);
     return null;
   });
 
@@ -194,11 +202,11 @@ const prepareGuild = async (guild: Guild): Promise<void> => {
 
   // 参加した人が使った招待リンクを調べられるよう、今の招待リンクの使用回数を覚える
   await loadInvites(guild).catch((error: unknown) => {
-    console.error(`「${guild.name}」の招待リンクを読めませんでした:`, error);
+    reportError(`「${guild.name}」の招待リンクを読めませんでした`, error, guild);
   });
   // VCの出入りの記録を、今VCにいる人に合わせる（Botが止まっていた間の出入りの分）
   await reconcileVoiceSessions(guild).catch((error: unknown) => {
-    console.error(`「${guild.name}」のVCの記録を合わせられませんでした:`, error);
+    reportError(`「${guild.name}」のVCの記録を合わせられませんでした`, error, guild);
   });
 };
 
@@ -236,6 +244,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await adminPanel.handleButton(interaction);
     } else if (interaction.isModalSubmit() && interaction.customId.startsWith(adminPanel.CUSTOM_ID_PREFIX)) {
       await adminPanel.handleModalSubmit(interaction);
+    } else if (interaction.isChannelSelectMenu() && interaction.customId.startsWith(adminPanel.CUSTOM_ID_PREFIX)) {
+      await adminPanel.handleChannelSelect(interaction);
     } else if (
       (interaction.isButton() || interaction.isStringSelectMenu() || interaction.isUserSelectMenu()) &&
       interaction.customId.startsWith(settingsPanel.CUSTOM_ID_PREFIX)
@@ -258,23 +268,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await voiceStatus.handleModalSubmit(interaction);
     }
   } catch (error) {
-    console.error('インタラクションの処理に失敗しました:', error);
+    reportError(`操作の処理に失敗しました（${interaction.isRepliable() ? interactionLabel(interaction) : interaction.type}）`, error, interaction.guild);
     await replyError(interaction, error);
   }
 });
 
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   logVoiceActivity(oldState, newState).catch((error: unknown) => {
-    console.error('VCのログを残せませんでした:', error);
+    reportError('VCのログを残せませんでした', error);
   });
   handleVoiceStateUpdate(oldState, newState).catch((error: unknown) => {
-    console.error('VC入室のお知らせに失敗しました:', error);
+    reportError('VC入室のお知らせに失敗しました', error);
   });
   handleCallStateUpdate(oldState, newState).catch((error: unknown) => {
-    console.error('通話の開始・終了のお知らせに失敗しました:', error);
+    reportError('通話の開始・終了のお知らせに失敗しました', error);
   });
   voiceStatus.handleVoiceStatusPrompt(oldState, newState).catch((error: unknown) => {
-    console.error('VCステータスのお知らせに失敗しました:', error);
+    reportError('VCステータスのお知らせに失敗しました', error);
   });
 });
 
@@ -286,8 +296,16 @@ client.ws.on(GatewayDispatchEvents.VoiceChannelStatusUpdate, (data: GatewayVoice
 // リアクションでのXP（付けられたメッセージを書いた人が要るので、届いたままの形で受け取る）
 client.ws.on(GatewayDispatchEvents.MessageReactionAdd, (data: GatewayMessageReactionAddDispatchData) => {
   handleReactionXp(client, data).catch((error: unknown) => {
-    console.error('リアクションのXPを保存できませんでした:', error);
+    reportError('リアクションのXPを保存できませんでした', error);
   });
+});
+
+client.on(Events.Error, (error) => {
+  reportError('Discordとの接続でエラーが起きました', error);
+});
+
+process.on('unhandledRejection', (reason) => {
+  reportError('処理されなかったエラー', reason);
 });
 
 client.on(Events.GuildMemberAdd, (member) => {
@@ -296,61 +314,61 @@ client.on(Events.GuildMemberAdd, (member) => {
     .catch(() => null)
     .then((invite) => logMemberJoin(member, invite))
     .catch((error: unknown) => {
-      console.error('参加のログを残せませんでした:', error);
+      reportError('参加のログを残せませんでした', error);
     });
 });
 
 client.on(Events.InviteCreate, (invite) => {
   handleInviteCreate(invite).catch((error: unknown) => {
-    console.error('招待リンク作成のログを残せませんでした:', error);
+    reportError('招待リンク作成のログを残せませんでした', error);
   });
 });
 
 client.on(Events.InviteDelete, (invite) => {
   handleInviteDelete(invite).catch((error: unknown) => {
-    console.error('招待リンク削除のログを残せませんでした:', error);
+    reportError('招待リンク削除のログを残せませんでした', error);
   });
 });
 
 // Discordの画面で直接行われた管理操作（ロールの付け外し・キック・BANなど）
 client.on(Events.GuildAuditLogEntryCreate, (entry, guild) => {
   handleAuditLogEntry(entry, guild).catch((error: unknown) => {
-    console.error('管理操作のログを残せませんでした:', error);
+    reportError('管理操作のログを残せませんでした', error);
   });
 });
 
 client.on(Events.GuildMemberRemove, (member) => {
   // プロフィールの後片付けをして、その結果も退出のログに残す
   handleMemberLeave(member).catch((error: unknown) => {
-    console.error('退出の処理に失敗しました:', error);
+    reportError('退出の処理に失敗しました', error);
   });
 });
 
 client.on(Events.MessageCreate, (message) => {
   handleMessageXp(message).catch((error: unknown) => {
-    console.error('発言の経験値を保存できませんでした:', error);
+    reportError('発言の経験値を保存できませんでした', error);
   });
   // あとで消された・編集されたときに内容が分かるよう、発言を記録する
   recordMessage(message).catch((error: unknown) => {
-    console.error('発言を記録できませんでした:', error);
+    reportError('発言を記録できませんでした', error);
   });
 });
 
 client.on(Events.MessageDelete, (message) => {
   logMessageDelete(message).catch((error: unknown) => {
-    console.error('メッセージ削除のログを残せませんでした:', error);
+    reportError('メッセージ削除のログを残せませんでした', error);
   });
 });
 
 client.on(Events.MessageBulkDelete, (messages, channel) => {
   logMessageBulkDelete(messages, channel).catch((error: unknown) => {
-    console.error('メッセージ一括削除のログを残せませんでした:', error);
+    reportError('メッセージ一括削除のログを残せませんでした', error);
   });
 });
 
 client.on(Events.MessageUpdate, (oldMessage, newMessage) => {
   logMessageUpdate(oldMessage, newMessage).catch((error: unknown) => {
-    console.error('メッセージ編集のログを残せませんでした:', error);
+    reportError('メッセージ編集のログを残せませんでした', error);
   });
 });
 

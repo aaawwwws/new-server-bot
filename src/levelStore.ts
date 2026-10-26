@@ -152,6 +152,12 @@ export const findLevelStats = async (guildId: string, userId: string): Promise<L
   return row ? toStats(row) : { userId, xp: 0, messageCount: 0, voiceMinutes: 0, reactionsGiven: 0, reactionsReceived: 0 };
 };
 
+/**
+ * 「来た日」の条件（発言・VC・リアクションをした日）。リアクションをもらっただけの日は、来ていない日として数える。
+ * 前の形の記録（発言・VCの回数を数える前）は発言・VCのXPだけなので、xp で見る
+ */
+const ACTIVE_DAY = '(message_count > 0 OR voice_minutes > 0 OR reactions_given > 0 OR (xp > 0 AND reactions_received = 0))';
+
 export interface Streak {
   userId: string;
   /** 今続いている日数。今日まだ来ていなくても、昨日まで続いていれば途切れていない扱い */
@@ -161,8 +167,7 @@ export interface Streak {
 }
 
 /**
- * 連続日数（発言・VC・リアクションをした日が何日続いているか）。user を渡すとその人だけ。
- * リアクションをもらっただけの日は、来ていない日として数える（前の形の記録は発言・VCのXPだけなので、xp で見る）。
+ * 連続日数（「来た日」が何日続いているか）。user を渡すとその人だけ。
  * 続いている日の並びは「日付 − 何日目か」が同じになるので、それでまとめて数える
  */
 const queryStreaks = async (guildId: string, today: string, userId: string | null): Promise<Streak[]> => {
@@ -170,7 +175,7 @@ const queryStreaks = async (guildId: string, today: string, userId: string | nul
     `WITH days AS (
        SELECT user_id, day FROM level_daily_xp
         WHERE guild_id = $1 AND day <= $2::date AND ($3::text IS NULL OR user_id = $3)
-          AND (message_count > 0 OR voice_minutes > 0 OR reactions_given > 0 OR (xp > 0 AND reactions_received = 0))
+          AND ${ACTIVE_DAY}
      ), runs AS (
        SELECT user_id, day, day - (row_number() OVER (PARTITION BY user_id ORDER BY day))::int AS run FROM days
      ), streaks AS (
@@ -209,4 +214,45 @@ export const findBestWeekXp = async (guildId: string, userId: string): Promise<{
   );
   const [row] = rows;
   return row ? { week: row.week, xp: Number(row.xp) } : null;
+};
+
+/** 人ごとの、最後に来た日（「来た日」の条件で見る） */
+export const listLastActiveDays = async (guildId: string): Promise<Map<string, string>> => {
+  const { rows } = await pool.query<{ user_id: string; day: string }>(
+    `SELECT user_id, max(day)::text AS day FROM level_daily_xp WHERE guild_id = $1 AND ${ACTIVE_DAY} GROUP BY user_id`,
+    [guildId],
+  );
+  return new Map(rows.map((row) => [row.user_id, row.day]));
+};
+
+/** from の日から to の日の前日までに、人ごとに何日来たか */
+export const listActiveDayCounts = async (guildId: string, from: string, to: string): Promise<Map<string, number>> => {
+  const { rows } = await pool.query<{ user_id: string; days: number }>(
+    `SELECT user_id, count(DISTINCT day)::int AS days FROM level_daily_xp
+      WHERE guild_id = $1 AND day >= $2::date AND day < $3::date AND ${ACTIVE_DAY}
+      GROUP BY user_id`,
+    [guildId, from, to],
+  );
+  return new Map(rows.map((row) => [row.user_id, row.days]));
+};
+
+/** 記録が始まった日（まだ何もなければ null） */
+export const findFirstRecordedDay = async (guildId: string): Promise<string | null> => {
+  const { rows } = await pool.query<{ day: string | null }>('SELECT min(day)::text AS day FROM level_daily_xp WHERE guild_id = $1', [guildId]);
+  return rows[0]?.day ?? null;
+};
+
+/**
+ * 管理者がXPを足す・引く（delta がマイナスなら引く。0 より下にはしない）。合計だけを変え、日ごとの記録は変えない
+ * （なので今日・今週・今月のランキングには入らず、レベルと累計のランキングにだけ効く）。変える前と後のXPを返す
+ */
+export const adjustXp = async (guildId: string, userId: string, delta: number): Promise<{ before: number; after: number }> => {
+  const { rows } = await pool.query<{ before: string | null; after: string }>(
+    `WITH old AS (SELECT xp FROM member_levels WHERE guild_id = $1 AND user_id = $2)
+     INSERT INTO member_levels (guild_id, user_id, xp) VALUES ($1, $2, GREATEST(0, $3::bigint))
+     ON CONFLICT (guild_id, user_id) DO UPDATE SET xp = GREATEST(0, member_levels.xp + $3::bigint), updated_at = now()
+     RETURNING (SELECT xp FROM old) AS before, xp AS after`,
+    [guildId, userId, delta],
+  );
+  return { before: Number(rows[0]?.before ?? 0), after: Number(rows[0]?.after ?? 0) };
 };

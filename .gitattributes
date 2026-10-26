@@ -1,0 +1,2 @@
+# シェルスクリプトは Linux（VPS）で動かすので、改行をLFのままにする
+*.sh text eol=lf

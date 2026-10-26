@@ -16,6 +16,7 @@ import {
   type Message,
   type ThreadChannel,
 } from 'discord.js';
+import { reportError } from './errorReporter.js';
 import { createLock } from './locks.js';
 import { filledCount, isFull, type RecruitConfig } from './recruitEngine.js';
 import { ROLE_EMOJIS, findPartyType, jobLabel, type PartyType } from './recruitParty.js';
@@ -329,7 +330,7 @@ export const refreshRecruitList = async (guild: Guild): Promise<void> => {
 export const startRecruitScheduler = (client: Client<true>): void => {
   setInterval(() => {
     runRecruitSchedule(client).catch((error: unknown) => {
-      console.error('募集の予定の処理に失敗しました:', error);
+      reportError('募集の予定の処理に失敗しました', error);
     });
   }, TICK_MS).unref();
 };

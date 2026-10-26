@@ -216,6 +216,15 @@ export const listFinishedRecruits = async (guildId: string, from: Date | null, t
   return rows.map(toRecruit);
 };
 
+/** from〜to に始まる予定だった募集の、状態ごとの数（管理レポート用） */
+export const countRecruitsByStatus = async (guildId: string, from: Date, to: Date): Promise<Map<RecruitStatus, number>> => {
+  const { rows } = await pool.query<{ status: RecruitStatus; count: number }>(
+    'SELECT status, count(*)::int AS count FROM recruits WHERE guild_id = $1 AND starts_at >= $2 AND starts_at < $3 GROUP BY status',
+    [guildId, from, to],
+  );
+  return new Map(rows.map((row) => [row.status, row.count]));
+};
+
 // ---- 作成途中の募集（下書き）
 
 export interface RecruitDraft extends RecruitConfig {

@@ -297,3 +297,27 @@ export const reopenApplication = async (id: string): Promise<void> => {
     [id],
   );
 };
+
+export interface ApplicationCounts {
+  /** 期間中に来た申請 */
+  created: number;
+  /** 期間中に許可した申請 */
+  approved: number;
+  /** 期間中に拒否した申請（キック・BANを含む） */
+  rejected: number;
+  /** 今の審査待ち */
+  pending: number;
+}
+
+/** from〜to の間の申請の数と、今の審査待ちの数（管理レポート用） */
+export const countApplications = async (guildId: string, from: Date, to: Date): Promise<ApplicationCounts> => {
+  const { rows } = await pool.query<ApplicationCounts>(
+    `SELECT count(*) FILTER (WHERE created_at >= $2 AND created_at < $3)::int AS created,
+            count(*) FILTER (WHERE reviewed_at >= $2 AND reviewed_at < $3 AND status = 'approved')::int AS approved,
+            count(*) FILTER (WHERE reviewed_at >= $2 AND reviewed_at < $3 AND status IN ('rejected', 'kicked', 'banned'))::int AS rejected,
+            count(*) FILTER (WHERE status = 'pending')::int AS pending
+       FROM profile_applications WHERE guild_id = $1`,
+    [guildId, from, to],
+  );
+  return rows[0] ?? { created: 0, approved: 0, rejected: 0, pending: 0 };
+};

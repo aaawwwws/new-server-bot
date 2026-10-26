@@ -16,12 +16,34 @@ import {
   messageLink,
   time,
   type ButtonInteraction,
+  type ChannelSelectMenuInteraction,
   type ChatInputCommandInteraction,
   type ModalSubmitInteraction,
 } from 'discord.js';
 import { sendLog } from '../activityLog.js';
+import { buildAdminReport } from '../adminReport.js';
+import {
+  DEFAULT_INACTIVE_DAYS,
+  INACTIVE_DAYS,
+  INACTIVE_PREFIX,
+  KARTE_BUTTON_ID,
+  KARTE_LOGS_PREFIX,
+  KARTE_MODAL_ID,
+  XP_ADJUST_BUTTON_ID,
+  XP_ADJUST_FOR_PREFIX,
+  XP_ADJUST_MODAL_ID,
+  XP_CHANNELS_BUTTON_ID,
+  XP_CHANNELS_SELECT_ID,
+  applyXpAdjustment,
+  buildMemberKarte,
+  inactiveScreen,
+  karteModal,
+  saveXpChannels,
+  xpAdjustModal,
+  xpChannelsScreen,
+} from '../adminTools.js';
 import { fetchAllMembers } from '../guildUtils.js';
-import { formatShortDateTime } from '../jst.js';
+import { addDays, formatShortDateTime, jstDay } from '../jst.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import { profileLogFields } from '../profile.js';
 import { ADMIN_ROLE_NAME, ensureAdmin } from '../permissions.js';
@@ -53,6 +75,7 @@ const DELETE_BUTTON_ID = `${CUSTOM_ID_PREFIX}delete`;
 const DELETE_MODAL_ID = `${CUSTOM_ID_PREFIX}delete-submit`;
 const LOG_SEARCH_BUTTON_ID = `${CUSTOM_ID_PREFIX}log-search`;
 const LOG_SEARCH_MODAL_ID = `${CUSTOM_ID_PREFIX}log-search-submit`;
+const REPORT_BUTTON_ID = `${CUSTOM_ID_PREFIX}report`;
 const BOOST_BUTTON_ID = `${CUSTOM_ID_PREFIX}boost`;
 const BOOST_NEW_BUTTON_ID = `${CUSTOM_ID_PREFIX}boost-new`;
 /** 「止める」ボタン（後ろにXPアップのIDが付く） */
@@ -67,6 +90,7 @@ const MAX_BOOST_BUTTONS = 5;
 const MEMBER_INPUT_ID = 'member';
 const MEMBER_ROLE_INPUT_ID = 'memberRole';
 const REASON_INPUT_ID = 'reason';
+const AMOUNT_INPUT_ID = 'amount';
 const TYPE_INPUT_ID = 'type';
 const DAYS_INPUT_ID = 'days';
 const KEYWORD_INPUT_ID = 'keyword';
@@ -117,34 +141,45 @@ export const buildPanel = (): PanelPayload => {
     .setTitle('🛠️ 管理パネル')
     .setDescription(
       [
-        `管理者用の操作です。「${ADMIN_ROLE_NAME}」ロールを持つ人だけが使えます。`,
+        `管理者用の操作です。「${ADMIN_ROLE_NAME}」ロールを持つ人だけが使えます。結果は押した人にだけ表示します。`,
         '',
-        '**👤 ユーザーを登録**',
-        `メンバーを選んで、本人の登録と同じ手順でプロフィールを入力します。審査なしで「${PROFILE_CHANNEL_NAME}」に投稿され、「${MEMBER_ROLE_NAME}」ロールが付きます。`,
-        '**📋 審査中の申請**',
-        'まだ許可・拒否していない申請の一覧です。',
-        '**👥 未登録のメンバー**',
-        '入ったまま、プロフィールを登録していない人の一覧です（参加が古い順）。',
-        '**🗑️ プロフィールを削除**',
-        `メンバーを選んで、プロフィールと「${PROFILE_CHANNEL_NAME}」の投稿を削除します。`,
-        '**🔎 ログ検索**',
-        '残しておいた行動ログ・発言・VCの出入りを、人・期間・キーワードで探します（一覧かCSV）。',
-        '**⚡ XPアップ**',
-        '期間を決めて、発言とVCでもらえるXPを1.5〜3倍にします（予約もできます）。',
+        '__**👤 メンバー**__',
+        `**ユーザーを登録**: メンバーを選んで、本人の登録と同じ手順でプロフィールを入力します（審査なしで「${PROFILE_CHANNEL_NAME}」に投稿し、「${MEMBER_ROLE_NAME}」ロールを付けます）`,
+        '**審査中の申請**: まだ許可・拒否していない申請の一覧',
+        '**未登録のメンバー**: 入ったまま、プロフィールを登録していない人の一覧',
+        `**プロフィールを削除**: プロフィールと「${PROFILE_CHANNEL_NAME}」の投稿を削除します`,
+        '',
+        '__**🔎 調べる**__',
+        '**メンバーの詳細**: 1人の参加日・招待リンク・プロフィール・レベル・最後に来た日・設定・ロール・最近のログをまとめて見ます',
+        '**来ていない人**: 最後に発言・VC・リアクションをした日が古い人の一覧（7〜60日）',
+        '**ログ検索**: 行動ログ・発言・VCの出入りを、人・期間・キーワードで探します（一覧かCSV）',
+        '**管理レポート**: 直近7日の参加・退出・申請・来た人・来なくなった人など（毎週月曜9時に「ログ」にも出ます）',
+        '',
+        '__**📊 レベル**__',
+        '**XPアップ**: 期間を決めて、発言とVCでもらえるXPを1.5〜3倍にします（予約もできます）',
+        '**XPの調整**: メンバーのXPを足す・引く（理由はログに残ります）',
+        '**XPなしチャンネル**: 発言・リアクション・VCをXPにしないチャンネルを選びます',
       ].join('\n'),
     )
     .setColor(0x99aab5);
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+  const memberRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     panelButton(REGISTER_BUTTON_ID, 'ユーザーを登録', '👤', ButtonStyle.Primary),
     panelButton(PENDING_BUTTON_ID, '審査中の申請', '📋', ButtonStyle.Secondary),
     panelButton(UNREGISTERED_BUTTON_ID, '未登録のメンバー', '👥', ButtonStyle.Secondary),
-    panelButton(LOG_SEARCH_BUTTON_ID, 'ログ検索', '🔎', ButtonStyle.Secondary),
     panelButton(DELETE_BUTTON_ID, 'プロフィールを削除', '🗑️', ButtonStyle.Danger),
   );
-  const secondRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    panelButton(BOOST_BUTTON_ID, 'XPアップ', '⚡', ButtonStyle.Secondary),
+  const lookupRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    panelButton(KARTE_BUTTON_ID, 'メンバーの詳細', '🗂️', ButtonStyle.Secondary),
+    panelButton(INACTIVE_PREFIX, '来ていない人', '💤', ButtonStyle.Secondary),
+    panelButton(LOG_SEARCH_BUTTON_ID, 'ログ検索', '🔎', ButtonStyle.Secondary),
+    panelButton(REPORT_BUTTON_ID, '管理レポート', '📊', ButtonStyle.Secondary),
   );
-  return { embeds: [embed], components: [row, secondRow] };
+  const levelRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    panelButton(BOOST_BUTTON_ID, 'XPアップ', '⚡', ButtonStyle.Secondary),
+    panelButton(XP_ADJUST_BUTTON_ID, 'XPの調整', '✏️', ButtonStyle.Secondary),
+    panelButton(XP_CHANNELS_BUTTON_ID, 'XPなしチャンネル', '🚫', ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [memberRow, lookupRow, levelRow] };
 };
 
 export const handleButton = async (interaction: ButtonInteraction<'cached'>): Promise<void> => {
@@ -177,10 +212,56 @@ export const handleButton = async (interaction: ButtonInteraction<'cached'>): Pr
     case BOOST_NEW_BUTTON_ID:
       await interaction.showModal(boostModal());
       return;
+    case KARTE_BUTTON_ID:
+      await interaction.showModal(karteModal());
+      return;
+    case XP_ADJUST_BUTTON_ID:
+      await interaction.showModal(xpAdjustModal());
+      return;
+    case XP_CHANNELS_BUTTON_ID:
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      await interaction.editReply(await xpChannelsScreen(interaction.guild));
+      return;
+    case REPORT_BUTTON_ID: {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const today = jstDay();
+      const embed = await buildAdminReport(interaction.guild, addDays(today, -6), addDays(today, 1), '📊 管理レポート（直近7日）');
+      await interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
+      return;
+    }
   }
   if (interaction.customId.startsWith(BOOST_STOP_PREFIX)) {
     await stopBoostFromButton(interaction, interaction.customId.slice(BOOST_STOP_PREFIX.length));
+    return;
   }
+  if (interaction.customId.startsWith(INACTIVE_PREFIX)) {
+    // パネルのボタンなら新しく出し、一覧の日数のボタンならその一覧を切り替える
+    const days = Number(interaction.customId.slice(INACTIVE_PREFIX.length + 1));
+    if (interaction.message.flags.has(MessageFlags.Ephemeral)) {
+      await interaction.deferUpdate();
+    } else {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    }
+    await interaction.editReply(await inactiveScreen(interaction.guild, INACTIVE_DAYS.includes(days) ? days : DEFAULT_INACTIVE_DAYS));
+    return;
+  }
+  if (interaction.customId.startsWith(KARTE_LOGS_PREFIX)) {
+    const userId = interaction.customId.slice(KARTE_LOGS_PREFIX.length);
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await replyWithSearch(interaction, { type: 'all', userId, days: 30, keyword: null }, false);
+    return;
+  }
+  if (interaction.customId.startsWith(XP_ADJUST_FOR_PREFIX)) {
+    await interaction.showModal(xpAdjustModal(interaction.customId.slice(XP_ADJUST_FOR_PREFIX.length)));
+  }
+};
+
+/** 「XPなしチャンネル」の選び直し */
+export const handleChannelSelect = async (interaction: ChannelSelectMenuInteraction<'cached'>): Promise<void> => {
+  if (interaction.customId !== XP_CHANNELS_SELECT_ID || !(await ensureAdmin(interaction))) return;
+  await interaction.deferUpdate();
+  const note = await saveXpChannels(interaction.member, interaction.values);
+  await interaction.editReply(await xpChannelsScreen(interaction.guild, note));
 };
 
 export const handleModalSubmit = async (interaction: ModalSubmitInteraction<'cached'>): Promise<void> => {
@@ -195,6 +276,25 @@ export const handleModalSubmit = async (interaction: ModalSubmitInteraction<'cac
     case BOOST_MODAL_ID:
       await createBoostFromModal(interaction);
       return;
+    case KARTE_MODAL_ID: {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const user = interaction.fields.getSelectedUsers(MEMBER_INPUT_ID)?.first();
+      const member = user ? await interaction.guild.members.fetch(user.id).catch(() => null) : null;
+      await interaction.editReply(member ? await buildMemberKarte(member) : { content: 'そのメンバーはサーバーにいません。' });
+      return;
+    }
+    case XP_ADJUST_MODAL_ID: {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const user = interaction.fields.getSelectedUsers(MEMBER_INPUT_ID)?.first();
+      const target = user ? await interaction.guild.members.fetch(user.id).catch(() => null) : null;
+      const content = await applyXpAdjustment(interaction.member, {
+        target,
+        amount: interaction.fields.getTextInputValue(AMOUNT_INPUT_ID),
+        reason: interaction.fields.getTextInputValue(REASON_INPUT_ID).trim(),
+      });
+      await interaction.editReply({ content, allowedMentions: { parse: [] } });
+      return;
+    }
   }
 };
 

@@ -1,6 +1,8 @@
 import { randomInt } from 'node:crypto';
 import type { Client, GatewayMessageReactionAddDispatchData, Guild, Message, VoiceState } from 'discord.js';
+import { reportError } from './errorReporter.js';
 import { fetchAllMembers } from './guildUtils.js';
+import { isXpExcluded } from './guildSettings.js';
 import { jstDay } from './jst.js';
 import { addMessageActivity, addReactionActivity, addVoiceMinute, recordReaction } from './levelStore.js';
 import { applyBoost, boostPercent } from './xpBoost.js';
@@ -53,6 +55,8 @@ const lastMessageXpAt = new Map<string, number>();
 /** 発言でXPを貯める（Bot・Webhook・システムメッセージは除く） */
 export const handleMessageXp = async (message: Message): Promise<void> => {
   if (!message.inGuild() || message.author.bot || message.webhookId || message.system) return;
+  // XPを入れないチャンネル（管理パネルで選んだもの）での発言は数えない
+  if (isXpExcluded(message.guildId, message.channel)) return;
 
   const key = `${message.guildId}:${message.author.id}`;
   const now = Date.now();
@@ -65,14 +69,14 @@ export const handleMessageXp = async (message: Message): Promise<void> => {
 /**
  * リアクションでXPを貯める。付けた人と、付けられたメッセージを書いた人の両方に入る（それぞれ1日の上限まで）。
  * 同じメッセージへは、絵文字を変えても・付け直しても1人1回だけ。外しても減らさない。
- * 自分の投稿へのリアクション、Botのリアクション、Bot・Webhook・抜けた人の投稿へのリアクションは数えない。
+ * 自分の投稿へのリアクション、Botのリアクション、Bot・Webhook・抜けた人の投稿へのリアクション、XPを入れないチャンネルのものは数えない。
  * discord.js は付けられたメッセージを書いた人を教えてくれないので、Discordから届いたままの形で受け取る
  */
 export const handleReactionXp = async (client: Client, data: GatewayMessageReactionAddDispatchData): Promise<void> => {
   const { guild_id: guildId, message_author_id: authorId, user_id: userId } = data;
   if (!guildId || !authorId || authorId === userId || data.member?.user.bot) return;
   const guild = client.guilds.cache.get(guildId);
-  if (!guild) return;
+  if (!guild || isXpExcluded(guildId, guild.channels.cache.get(data.channel_id) ?? { id: data.channel_id })) return;
   const author = (await fetchAllMembers(guild)).get(authorId);
   if (!author || author.user.bot) return;
   if (!(await recordReaction(guildId, data.message_id, userId))) return;
@@ -91,6 +95,7 @@ export const voiceXpEarners = (guild: Guild): string[] => {
   const byChannel = new Map<string, VoiceState[]>();
   for (const state of guild.voiceStates.cache.values()) {
     if (!state.channelId || state.channelId === guild.afkChannelId || !state.member || state.member.user.bot) continue;
+    if (isXpExcluded(guild.id, state.channel ?? { id: state.channelId })) continue;
     byChannel.set(state.channelId, [...(byChannel.get(state.channelId) ?? []), state]);
   }
   return [...byChannel.values()]
@@ -103,7 +108,7 @@ export const startVoiceXp = (client: Client<true>): void => {
   setInterval(() => {
     for (const guild of client.guilds.cache.values()) {
       giveVoiceXp(guild).catch((error: unknown) => {
-        console.error(`「${guild.name}」のVCのXPを保存できませんでした:`, error);
+        reportError(`「${guild.name}」のVCのXPを保存できませんでした`, error, guild);
       });
     }
   }, VOICE_TICK_MS).unref();

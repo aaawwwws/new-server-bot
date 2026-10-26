@@ -2,6 +2,7 @@ import {
   InteractionContextType,
   MessageFlags,
   SlashCommandBuilder,
+  type ButtonInteraction,
   type ChatInputCommandInteraction,
   type ModalSubmitInteraction,
 } from 'discord.js';
@@ -63,7 +64,7 @@ export const execute = async (interaction: ChatInputCommandInteraction<'cached'>
 
 /** 探した結果を、本人にだけ見える返信で出す（先に deferReply しておくこと）。管理パネルのログ検索でも使う */
 export const replyWithSearch = async (
-  interaction: ChatInputCommandInteraction<'cached'> | ModalSubmitInteraction<'cached'>,
+  interaction: ChatInputCommandInteraction<'cached'> | ModalSubmitInteraction<'cached'> | ButtonInteraction<'cached'>,
   filter: LogSearchFilter,
   asCsv: boolean,
 ): Promise<void> => {

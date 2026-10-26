@@ -12,6 +12,7 @@ import {
 } from 'discord.js';
 import { sendLog } from './activityLog.js';
 import { pool } from './db.js';
+import { reportError } from './errorReporter.js';
 import { fetchAllMembers } from './guildUtils.js';
 import { addDays, addMonths, formatDay, formatMonth, jstDay, monthStart, weekStart } from './jst.js';
 import { computeRanking, rankXpBetween, rankingLine, type RankingEntry } from './rankings.js';
@@ -174,7 +175,7 @@ export const refreshBoard = async (guild: Guild, channel: GuildTextBasedChannel,
     return true;
   } catch (error) {
     if (error instanceof DiscordAPIError && error.code === RESTJSONErrorCodes.UnknownMessage) return false;
-    console.error(`「${guild.name}」のランキング掲示板を更新できませんでした:`, error);
+    reportError(`「${guild.name}」のランキング掲示板を更新できませんでした`, error, guild);
     return true;
   }
 };
@@ -260,7 +261,7 @@ const recordFinishedPeriods = async (guild: Guild, now: Date): Promise<void> => 
 export const startRankingBoards = (client: Client<true>): void => {
   setInterval(() => {
     runRankingSchedule(client).catch((error: unknown) => {
-      console.error('ランキング掲示板の処理に失敗しました:', error);
+      reportError('ランキング掲示板の処理に失敗しました', error);
     });
   }, TICK_MS).unref();
 };
@@ -268,7 +269,7 @@ export const startRankingBoards = (client: Client<true>): void => {
 export const runRankingSchedule = async (client: Client<true>, now: Date = new Date()): Promise<void> => {
   for (const guild of client.guilds.cache.values()) {
     await recordFinishedPeriods(guild, now).catch((error: unknown) => {
-      console.error(`「${guild.name}」のランキングの結果を残せませんでした:`, error);
+      reportError(`「${guild.name}」のランキングの結果を残せませんでした`, error, guild);
     });
   }
 

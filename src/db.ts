@@ -143,6 +143,23 @@ export const initDatabase = async (): Promise<void> => {
       PRIMARY KEY (guild_id, period, period_start, rank)
     )
   `);
+  // サーバーごとの設定。xp_excluded_channel_ids はXPを入れないチャンネル（カテゴリーを選ぶと、その中のチャンネルも）
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS guild_settings (
+      guild_id                text        PRIMARY KEY,
+      xp_excluded_channel_ids text[]      NOT NULL DEFAULT '{}',
+      updated_at              timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  // 週1回の管理レポートを、どの週（その週の月曜）の分まで投稿したか
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_reports (
+      guild_id   text        NOT NULL,
+      week_start date        NOT NULL,
+      posted_at  timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (guild_id, week_start)
+    )
+  `);
   // XPアップ期間（管理者が決めた期間だけ、もらえるXPを増やす）。percent は倍率（200 なら2倍）
   await pool.query(`
     CREATE TABLE IF NOT EXISTS xp_boosts (

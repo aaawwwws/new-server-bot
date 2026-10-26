@@ -8,6 +8,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      # 管理レポートで、DBのバックアップが作られているかを見るため（見るだけ）
+      - ./backups:/backups:ro
     restart: unless-stopped
     logging:
       options:
@@ -32,6 +35,28 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
+
+  # DBのバックアップ。毎日4時（日本時間）すぎに ./backups へ保存し、14日より古いものは消す（中身は scripts/backup.sh）
+  backup:
+    image: postgres:17-alpine
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      KEEP_DAYS: "14"
+    volumes:
+      - ./backups:/backups
+      - ./scripts/backup.sh:/backup.sh:ro
+    entrypoint: ["sh", "/backup.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: 1m
+        max-file: "3"
 
 volumes:
   db-data:

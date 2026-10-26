@@ -73,6 +73,7 @@ const LOG_STYLES = {
   invite: { label: '招待リンク', color: 0x1abc9c },
   command: { label: '管理コマンド', color: 0x607d8b },
   denied: { label: '権限拒否', color: 0xed4245 },
+  error: { label: 'Botのエラー', color: 0xed4245 },
   system: { label: 'Bot', color: 0x99aab5 },
 } as const;
 export type LogKind = keyof typeof LOG_STYLES;

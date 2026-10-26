@@ -182,6 +182,45 @@ export const closeVoiceSessionById = async (id: string, leftAt: Date): Promise<v
 
 // ---- 古い記録の片付け
 
+export interface RecentLog {
+  title: string;
+  text: string;
+  createdAt: Date;
+}
+
+/** その人が実行した・対象になった行動ログ（新しい順） */
+export const listRecentLogsFor = async (guildId: string, userId: string, limit: number): Promise<RecentLog[]> => {
+  const { rows } = await pool.query<{ title: string; text: string; created_at: Date }>(
+    `SELECT title, text, created_at FROM activity_logs
+      WHERE guild_id = $1 AND (actor_id = $2 OR target_id = $2) AND kind <> 'error'
+      ORDER BY created_at DESC LIMIT $3`,
+    [guildId, userId, limit],
+  );
+  return rows.map((row) => ({ title: row.title, text: row.text, createdAt: row.created_at }));
+};
+
+/** 参加したときのログに残した、使った招待リンク（記録がなければ null） */
+export const findJoinInvite = async (guildId: string, userId: string): Promise<string | null> => {
+  const { rows } = await pool.query<{ details: { name: string; value: string }[] }>(
+    `SELECT details FROM activity_logs
+      WHERE guild_id = $1 AND kind = 'join' AND (actor_id = $2 OR target_id = $2)
+      ORDER BY created_at DESC LIMIT 1`,
+    [guildId, userId],
+  );
+  return rows[0]?.details.find((field) => field.name.includes('招待リンク'))?.value ?? null;
+};
+
+/** from〜to の間の、種類ごとのログの数（管理レポート用） */
+export const countLogsByKind = async (guildId: string, kinds: string[], from: Date, to: Date): Promise<Map<string, number>> => {
+  const { rows } = await pool.query<{ kind: string; count: number }>(
+    `SELECT kind, count(*)::int AS count FROM activity_logs
+      WHERE guild_id = $1 AND kind = ANY($2) AND created_at >= $3 AND created_at < $4
+      GROUP BY kind`,
+    [guildId, kinds, from, to],
+  );
+  return new Map(rows.map((row) => [row.kind, row.count]));
+};
+
 export const deleteOldLogs = async (now: Date = new Date()): Promise<{ messages: number; logs: number; voice: number }> => {
   const day = 24 * 60 * 60 * 1000;
   const messageLimit = new Date(now.getTime() - MESSAGE_RETENTION_DAYS * day);
