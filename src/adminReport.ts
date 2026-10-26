@@ -101,7 +101,7 @@ export const buildAdminReport = async (guild: Guild, from: string, to: string, t
       { name: `🆕 未登録のまま${UNREGISTERED_DAYS}日以上`, value: `${unregistered}人`, inline: true },
       {
         name: '💬 発言・🎧 VC・👍 リアクション',
-        value: `${formatNumber(sum('messageCount'))}回・${formatDuration(sum('voiceMinutes') * 60_000)}・${formatNumber(sum('reactionsGiven'))}回`,
+        value: `${formatNumber(sum('messageCount'))}回・${sum('voiceMinutes') > 0 ? formatDuration(sum('voiceMinutes') * 60_000) : '0分'}・${formatNumber(sum('reactionsGiven'))}回`,
         inline: true,
       },
       { name: '🎮 PT募集', value: `終わった ${recruits.get('finished') ?? 0}件・中止 ${recruits.get('cancelled') ?? 0}件`, inline: true },
