@@ -58,6 +58,7 @@ import {
 import { submitApplication } from '../profileReview.js';
 import { findContentRoles, toggleContentRole } from '../contentRoles.js';
 import { findProgressRoles, setProgressRole } from '../progressRoles.js';
+import { INVITE_ME_ROLE_NAME, findInviteMeRole, setInviteMe } from '../inviteMeRole.js';
 import { VC_ROLE_NAME, findVcRole, setVcNotice } from '../vcRole.js';
 
 // customId は「profile:<操作>:<値>」の形。
@@ -70,8 +71,8 @@ const MODAL_ID = `${CUSTOM_ID_PREFIX}submit`;
 const ADMIN_RETRY_BUTTON_ID = `${CUSTOM_ID_PREFIX}admin-retry`;
 const ADMIN_MODAL_ID = `${CUSTOM_ID_PREFIX}admin-submit`;
 const MEMBER_INPUT_ID = 'member';
-/** 入力の手順。進行度・コンテンツ・「VC」のロールがないサーバーでは、その手順を飛ばす */
-const STEPS = ['progress', 'dataCenter', 'world', 'time', 'job', 'content', 'vc'] as const;
+/** 入力の手順。進行度・コンテンツ・「VC」・「いつでも誘って下さい」のロールがないサーバーでは、その手順を飛ばす */
+const STEPS = ['progress', 'dataCenter', 'world', 'time', 'job', 'content', 'vc', 'inviteMe'] as const;
 type StepName = (typeof STEPS)[number];
 
 type ComponentInteraction = ButtonInteraction<'cached'> | StringSelectMenuInteraction<'cached'>;
@@ -137,6 +138,7 @@ export const buildPanel = (guild: Guild): PanelPayload => {
     '使用ジョブ',
     ...(findContentRoles(guild).length > 0 ? ['よく遊ぶコンテンツ（任意）'] : []),
     ...(findVcRole(guild) ? ['VC通知を受け取るか'] : []),
+    ...(findInviteMeRole(guild) ? ['いつでも誘ってほしいか'] : []),
   ];
   const embed = new EmbedBuilder()
     .setTitle('🪪 プロフィール登録')
@@ -293,6 +295,20 @@ export const handleComponent = async (interaction: ComponentInteraction): Promis
         }
         ctx.target = await setVcNotice(ctx.target, role, value === 'on', interaction.member);
         step = vcStep(ctx, value === 'on');
+        break;
+      }
+      case 'vc-next':
+        step = stepAfter(ctx, 'vc', profile);
+        break;
+      case 'inviteme': {
+        // これも押したらすぐ「いつでも誘って下さい」ロールを付け外しする。ロールが消されていたら、この手順を飛ばす
+        const role = findInviteMeRole(interaction.guild);
+        if (!role || (value !== 'on' && value !== 'off')) {
+          step = stepAfter(ctx, 'vc', profile);
+          break;
+        }
+        ctx.target = await setInviteMe(ctx.target, role, value === 'on', interaction.member);
+        step = inviteMeStep(ctx, value === 'on');
         break;
       }
       // post は「登録する」だった頃の入力画面から押された場合
@@ -560,7 +576,7 @@ const timeStep = (ctx: WizardContext, profile: Profile): WizardStep => ({
   ],
 });
 
-/** この後の手順（コンテンツ・VC通知）がなければ、ここが最後（「申請する」「登録する」） */
+/** この後の手順（コンテンツ・VC通知・いつでも誘って）がなければ、ここが最後（「申請する」「登録する」） */
 const jobStep = (ctx: WizardContext, profile: Profile): WizardStep => {
   const isLast = nextStep(ctx.target.guild, 'job') === undefined;
   const next = isLast ? finishLabel(ctx) : '次へ';
@@ -581,7 +597,7 @@ const jobStep = (ctx: WizardContext, profile: Profile): WizardStep => {
   };
 };
 
-/** 押すとすぐロールが付く（任意）。VC通知の手順がなければ、ここが最後 */
+/** 押すとすぐロールが付く（任意）。この後の手順（VC通知・いつでも誘って）がなければ、ここが最後 */
 const contentStep = (ctx: WizardContext): WizardStep => {
   const isLast = nextStep(ctx.target.guild, 'content') === undefined;
   const next = isLast ? finishLabel(ctx) : '次へ';
@@ -598,37 +614,64 @@ const contentStep = (ctx: WizardContext): WizardStep => {
 };
 
 /**
- * 最後の手順。VC通知を受け取るか（押すとすぐ「VC」ロールを付け外しする）。
- * 必ず答えてもらうため、どちらかを選ぶまで「申請する」は押せない（すでに受け取る設定の人は、そのままでも押せる）
+ * VC通知を受け取るか（押すとすぐ「VC」ロールを付け外しする）。
+ * 必ず答えてもらうため、どちらかを選ぶまで先に進めない（すでに受け取る設定の人は、そのままでも進める）
  */
 const vcStep = (ctx: WizardContext, chosen?: boolean): WizardStep => {
   const { target } = ctx;
   const role = findVcRole(target.guild);
   const selected = chosen ?? (role && target.roles.cache.has(role.id) ? true : undefined);
+  const isLast = nextStep(target.guild, 'vc') === undefined;
+  const next = isLast
+    ? finishButton(ctx)
+    : new ButtonBuilder().setCustomId(customId(ctx, 'vc-next')).setLabel('次へ').setStyle(ButtonStyle.Success);
   return {
     content: [
       `${stepLabel(target.guild, 'vc')} ${ctx.byAdmin ? 'このメンバーが' : ''}VC通知を受け取りますか？`,
       `受け取ると「${VC_ROLE_NAME}」ロールが付き、誰かが通話を始めたときに「${NOTICE_CHANNEL_NAME}」チャンネルでメンションが届きます。`,
+      `あとから設定パネルでいつでも変えられます。選んだら「${isLast ? finishLabel(ctx) : '次へ'}」を押してください。`,
+    ].join('\n'),
+    components: [toRow(...vcNoticeButtons(selected, (choice) => customId(ctx, 'vc', choice)), next.setDisabled(selected === undefined))],
+  };
+};
+
+/**
+ * 最後の手順。いつでも誘ってほしいか（押すとすぐ「いつでも誘って下さい」ロールを付け外しする）。
+ * VC通知と同じく、どちらかを選ぶまで「申請する」は押せない（すでに付けている人は、そのままでも押せる）
+ */
+const inviteMeStep = (ctx: WizardContext, chosen?: boolean): WizardStep => {
+  const { target } = ctx;
+  const role = findInviteMeRole(target.guild);
+  const selected = chosen ?? (role && target.roles.cache.has(role.id) ? true : undefined);
+  const choice = (on: boolean, label: string, emoji: string): ButtonBuilder =>
+    new ButtonBuilder()
+      .setCustomId(customId(ctx, 'inviteme', on ? 'on' : 'off'))
+      .setLabel(label)
+      .setEmoji({ name: emoji })
+      .setStyle(selected === on ? ButtonStyle.Primary : ButtonStyle.Secondary);
+  return {
+    content: [
+      `${stepLabel(target.guild, 'inviteMe')} ${ctx.byAdmin ? 'このメンバーは' : ''}いつでも誘ってほしいですか？`,
+      `誘ってほしいなら「${INVITE_ME_ROLE_NAME}」ロールが付き、プロフィールに「🙌 いつでも誘ってください！」が出ます。PT募集で声をかけてもらいやすくなります。`,
       `あとから設定パネルでいつでも変えられます。選んだら「${finishLabel(ctx)}」を押してください。`,
     ].join('\n'),
     components: [
-      toRow(
-        ...vcNoticeButtons(selected, (choice) => customId(ctx, 'vc', choice)),
-        finishButton(ctx).setDisabled(selected === undefined),
-      ),
+      toRow(choice(true, '誘ってほしい', '🙌'), choice(false, '今はいい', '🙂'), finishButton(ctx).setDisabled(selected === undefined)),
     ],
   };
 };
 
-/** ジョブ・コンテンツの「次へ」の行き先。次の手順がなくなっていたら（ロールが消されたなど）、同じ手順を出し直す（「申請する」が出る） */
-const stepAfter = (ctx: WizardContext, from: 'job' | 'content', profile: Profile): WizardStep => {
+/** ジョブ・コンテンツ・VC通知の「次へ」の行き先。次の手順がなくなっていたら（ロールが消されたなど）、同じ手順を出し直す（「申請する」が出る） */
+const stepAfter = (ctx: WizardContext, from: 'job' | 'content' | 'vc', profile: Profile): WizardStep => {
   switch (nextStep(ctx.target.guild, from)) {
     case 'content':
       return contentStep(ctx);
     case 'vc':
       return vcStep(ctx);
+    case 'inviteMe':
+      return inviteMeStep(ctx);
     default:
-      return from === 'job' ? jobStep(ctx, profile) : contentStep(ctx);
+      return from === 'job' ? jobStep(ctx, profile) : from === 'content' ? contentStep(ctx) : vcStep(ctx);
   }
 };
 
@@ -638,7 +681,7 @@ const finishButton = (ctx: WizardContext): ButtonBuilder =>
 
 const finishLabel = (ctx: WizardContext): string => (ctx.byAdmin ? '登録する' : '申請する');
 
-/** このサーバーで使う手順。進行度・コンテンツ・「VC」のロールがなければ、その手順を飛ばす */
+/** このサーバーで使う手順。進行度・コンテンツ・「VC」・「いつでも誘って下さい」のロールがなければ、その手順を飛ばす */
 const availableSteps = (guild: Guild): StepName[] =>
   STEPS.filter((step) => {
     switch (step) {
@@ -648,6 +691,8 @@ const availableSteps = (guild: Guild): StepName[] =>
         return findContentRoles(guild).length > 0;
       case 'vc':
         return findVcRole(guild) !== undefined;
+      case 'inviteMe':
+        return findInviteMeRole(guild) !== undefined;
       default:
         return true;
     }

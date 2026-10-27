@@ -55,6 +55,7 @@ import * as rankingView from './rankingView.js';
 import { refreshActiveRecruits, startRecruitScheduler } from './recruitMessage.js';
 import { ADMIN_ROLE_NAME, ensureAdmin, ensureAdminRole, interactionLabel, logCommand } from './permissions.js';
 import * as profileReview from './profileReview.js';
+import { INVITE_ME_ROLE_NAME, ensureInviteMeRole } from './inviteMeRole.js';
 import { VC_ROLE_NAME, ensureVcRole } from './vcRole.js';
 import { handleVoiceStateUpdate } from './voiceJoinNotice.js';
 import * as voiceStatus from './voiceStatus.js';
@@ -190,12 +191,20 @@ const prepareGuild = async (guild: Guild): Promise<void> => {
     return null;
   });
 
+  const inviteMeRole = await ensureInviteMeRole(guild).catch((error: unknown) => {
+    reportError(`「${guild.name}」に「${INVITE_ME_ROLE_NAME}」ロールを作れませんでした`, error, guild);
+    return null;
+  });
+
   // 作ったことは、用意できたログチャンネルに残す
   if (logChannel) {
     await sendLog(guild, 'system', `${logChannel} チャンネルがなかったので作成しました（「${ADMIN_ROLE_NAME}」ロールの人だけが見られます）`);
   }
   if (adminRole) {
     await sendLog(guild, 'system', `「${ADMIN_ROLE_NAME}」ロールがなかったので作成しました。管理する人に付けてください`);
+  }
+  if (inviteMeRole) {
+    await sendLog(guild, 'system', `「${INVITE_ME_ROLE_NAME}」ロールがなかったので作成しました。設定パネルの「いつでも誘って」で、本人が付け外しできます`);
   }
   if (vcRole) {
     await sendLog(guild, 'system', `「${VC_ROLE_NAME}」ロールがなかったので作成しました。VC通知を受け取る人に、設定パネルや登録の手順で付きます`);

@@ -25,6 +25,7 @@ import { checkCharacterName } from '../characterName.js';
 import { findContentRoles, toggleContentRole } from '../contentRoles.js';
 import { DATA_CENTERS, type DataCenter } from '../dataCenters.js';
 import { ensurePersonalInvite } from '../inviteLinks.js';
+import { INVITE_ME_ROLE_NAME, findInviteMeRole, setInviteMe } from '../inviteMeRole.js';
 import { loadJoinAnnounce, loadRankingHidden, saveJoinAnnounce, type JoinAnnounceKey, type JoinAnnounceSettings } from '../memberSettings.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import { buildProfileEmbed, describeJobs, describeTime, describeWorld, type Profile } from '../profile.js';
@@ -82,6 +83,7 @@ const PROFILE_MENU_ID = `${CUSTOM_ID_PREFIX}menu:profile`;
 const VC_MENU_ID = `${CUSTOM_ID_PREFIX}menu:vc`;
 const LEVEL_MENU_ID = `${CUSTOM_ID_PREFIX}menu:level`;
 const INVITE_MENU_ID = `${CUSTOM_ID_PREFIX}menu:invite`;
+const INVITE_ME_MENU_ID = `${CUSTOM_ID_PREFIX}menu:inviteme`;
 const LEVEL_USER_SELECT_ID = `${CUSTOM_ID_PREFIX}level-user`;
 interface JoinAnnounceItem {
   key: JoinAnnounceKey;
@@ -173,6 +175,9 @@ export const buildPanel = (): PanelPayload => {
         '',
         '**📨 招待**',
         'あなた専用の招待リンクを作れます。リンクで入った人がプロフィール登録まで進むと、招待ランキングに数えられます。',
+        '',
+        '**🙌 いつでも誘って**',
+        `「${INVITE_ME_ROLE_NAME}」ロールを自分で付け外しできます。付けるとプロフィールに出て、PT募集でこのロールに声をかけてもらえます。`,
       ].join('\n'),
     )
     .setColor(0x5865f2);
@@ -181,6 +186,7 @@ export const buildPanel = (): PanelPayload => {
     new ButtonBuilder().setCustomId(VC_MENU_ID).setLabel('VC通知').setEmoji({ name: '🔔' }).setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(LEVEL_MENU_ID).setLabel('レベル').setEmoji({ name: '📊' }).setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(INVITE_MENU_ID).setLabel('招待').setEmoji({ name: '📨' }).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(INVITE_ME_MENU_ID).setLabel('いつでも誘って').setEmoji({ name: '🙌' }).setStyle(ButtonStyle.Primary),
   );
   return { embeds: [embed], components: [row] };
 };
@@ -198,6 +204,9 @@ export const handleComponent = async (interaction: ComponentInteraction): Promis
         return;
       case 'invite':
         await showAfterDefer(interaction, () => inviteScreen(interaction.member));
+        return;
+      case 'inviteme':
+        await show(interaction, inviteMeScreen(interaction.member));
         return;
       default:
         await openProfileMenu(interaction);
@@ -232,6 +241,18 @@ export const handleComponent = async (interaction: ComponentInteraction): Promis
       const userId = interaction.isUserSelectMenu() ? interaction.values[0] : undefined;
       const target = userId ? await interaction.guild.members.fetch(userId).catch(() => null) : null;
       await interaction.editReply(withFiles(await levelScreen(interaction.member, target)));
+      return;
+    }
+    case 'inviteme': {
+      const role = findInviteMeRole(interaction.guild);
+      if (!role || (value !== 'on' && value !== 'off')) {
+        await interaction.editReply(withFiles(inviteMeScreen(interaction.member)));
+        return;
+      }
+      // 付け外しとログは setInviteMe が行う。プロフの投稿にも「いつでも誘って」を出す・消す
+      const member = await setInviteMe(interaction.member, role, value === 'on');
+      await refreshPostedProfile(member);
+      await interaction.editReply(withFiles(inviteMeScreen(member, value === 'on' ? '🙌 付けました。' : '外しました。')));
       return;
     }
     case 'invite-renew':
@@ -642,6 +663,30 @@ const levelScreen = async (viewer: GuildMember, target: GuildMember | null, note
     embeds: view.embeds,
     files: view.files,
     components,
+  };
+};
+
+/** 「いつでも誘って下さい」ロールの付け外しの画面（今の状態を青く表示する） */
+const inviteMeScreen = (member: GuildMember, note?: string): Screen => {
+  const role = findInviteMeRole(member.guild);
+  if (!role) {
+    return { content: `「${INVITE_ME_ROLE_NAME}」ロールがないため、今は使えません（Botの再起動時に作られます）。`, components: [] };
+  }
+  const on = member.roles.cache.has(role.id);
+  return {
+    content: [
+      ...(note ? [note, ''] : []),
+      `🙌 **「${INVITE_ME_ROLE_NAME}」ロール**（青いボタンが今の設定です）`,
+      '',
+      '付けると、プロフィールに「いつでも誘ってください！」と出ます。',
+      'PT募集を作る人が、メンション先にこのロールを選んで声をかけられます。',
+    ].join('\n'),
+    components: [
+      toRow(
+        toggleButton(customId('inviteme', 'on'), '付ける', on).setEmoji({ name: '🙌' }),
+        toggleButton(customId('inviteme', 'off'), '付けない', !on),
+      ),
+    ],
   };
 };
 

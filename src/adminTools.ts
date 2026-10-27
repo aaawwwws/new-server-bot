@@ -29,6 +29,7 @@ import { describeWorld } from './profile.js';
 import { findStoredProfile, listPendingApplications } from './profileStore.js';
 import { computeRanking, isRankingExempt, summarizeInvites } from './rankings.js';
 import { listFinishedRecruits } from './recruitStore.js';
+import { findInviteMeRole } from './inviteMeRole.js';
 import { findVcRole } from './vcRole.js';
 
 // 管理パネルの「メンバーの詳細」「来ていない人」「XPの調整」「XPなしチャンネル」の中身。
@@ -117,6 +118,7 @@ export const buildMemberKarte = async (member: GuildMember, now: Date = new Date
   const hosted = recruits.filter((recruit) => recruit.hostId === member.id).length;
   const joined = recruits.filter((recruit) => recruit.participants.some((p) => p.slot && p.userId === member.id)).length;
   const vcRole = findVcRole(guild);
+  const inviteMeRole = findInviteMeRole(guild);
   const roles = member.roles.cache
     .filter((role) => role.id !== guild.id)
     .sort((a, b) => b.position - a.position)
@@ -159,6 +161,7 @@ export const buildMemberKarte = async (member: GuildMember, now: Date = new Date
           `通話開始のお知らせ: ${announce.callStart ? 'する' : 'しない'}`,
           `VC入室のプロフ: ${announce.vcJoin ? '出す' : '出さない'}`,
           `ランキング: ${hidden ? '出さない' : '出す'}`,
+          `いつでも誘って: ${inviteMeRole && member.roles.cache.has(inviteMeRole.id) ? '付けている' : '付けていない'}`,
         ].join('\n'),
         inline: true,
       },

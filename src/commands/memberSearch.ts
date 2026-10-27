@@ -11,6 +11,7 @@ import { CONTENT_ROLES, findContentRoles } from '../contentRoles.js';
 import { DATA_CENTERS } from '../dataCenters.js';
 import { EXPANSIONS } from '../expansions.js';
 import { fetchAllMembers } from '../guildUtils.js';
+import { INVITE_ME_ROLE_NAME, findInviteMeRole } from '../inviteMeRole.js';
 import { JOBS, type JobRole } from '../jobs.js';
 import { describeJobs, describeTime, describeWorld, type Profile } from '../profile.js';
 import { listStoredProfiles } from '../profileStore.js';
@@ -71,6 +72,12 @@ export const data = new SlashCommandBuilder()
       .setDescription('この時刻（0〜23時）に遊んでいる人')
       .setMinValue(0)
       .setMaxValue(23),
+  )
+  .addBooleanOption((option) =>
+    option
+      .setName('invite-me')
+      .setNameLocalizations({ ja: 'いつでも誘って' })
+      .setDescription(`「${INVITE_ME_ROLE_NAME}」ロールを付けている人だけ`),
   );
 
 export const execute = async (interaction: ChatInputCommandInteraction<'cached'>): Promise<void> => {
@@ -84,6 +91,8 @@ export const execute = async (interaction: ChatInputCommandInteraction<'cached'>
   const progress = options.getString('progress');
   const content = options.getString('content');
   const hour = options.getInteger('hour');
+  const inviteMe = options.getBoolean('invite-me') ?? false;
+  const inviteMeRole = findInviteMeRole(guild);
 
   // 進行度・コンテンツはロールなので、今のメンバーの情報が必要
   const [profiles, members] = await Promise.all([listStoredProfiles(guild.id), fetchAllMembers(guild)]);
@@ -101,7 +110,8 @@ export const execute = async (interaction: ChatInputCommandInteraction<'cached'>
       (!world || profile.world?.toLowerCase() === world.toLowerCase()) &&
       (!progress || (progressRole !== undefined && member.roles.cache.has(progressRole.id))) &&
       (!content || (contentRole !== undefined && member.roles.cache.has(contentRole.id))) &&
-      (hour === null || isActiveAt(profile, hour));
+      (hour === null || isActiveAt(profile, hour)) &&
+      (!inviteMe || (inviteMeRole !== undefined && member.roles.cache.has(inviteMeRole.id)));
     return ok ? [{ entry, member }] : [];
   });
 
@@ -113,13 +123,14 @@ export const execute = async (interaction: ChatInputCommandInteraction<'cached'>
     progress && `進行度: ${progress}`,
     content && `よく遊ぶ: ${content}`,
     hour !== null && `${hour}時に活動`,
+    inviteMe && 'いつでも誘ってOK',
   ].filter(Boolean);
 
   const lines = matches.slice(0, MAX_RESULTS).flatMap(({ entry, member }) => {
     const link =
       entry.channelId && entry.messageId ? ` ・ [プロフ](${messageLink(entry.channelId, entry.messageId, guild.id)})` : '';
     return [
-      `**${entry.profile.name}**（${escapeMarkdown(member.displayName)}・@${escapeMarkdown(member.user.username)}）`,
+      `**${entry.profile.name}**（${escapeMarkdown(member.displayName)}・@${escapeMarkdown(member.user.username)}）${inviteMeRole && member.roles.cache.has(inviteMeRole.id) ? ' 🙌' : ''}`,
       `　${describeWorld(entry.profile)} ・ ${describeJobs(entry.profile)} ・ ${describeTime(entry.profile)}${link}`,
     ];
   });

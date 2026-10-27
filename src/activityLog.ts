@@ -65,6 +65,7 @@ const LOG_STYLES = {
   ban: { label: 'BAN（審査）', color: 0x992d22 },
   voice: { label: 'VC', color: 0x3498db },
   vcNotice: { label: 'VC通知の設定', color: 0x3498db },
+  inviteMe: { label: '「いつでも誘って」の設定', color: 0x57f287 },
   level: { label: 'レベル・ランキング', color: 0xf1c40f },
   messageDelete: { label: 'メッセージ削除', color: 0xe67e22 },
   messageEdit: { label: 'メッセージ編集', color: 0xf1c40f },

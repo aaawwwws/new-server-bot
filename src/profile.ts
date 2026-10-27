@@ -1,5 +1,6 @@
 import { EmbedBuilder, type APIEmbedField, type Embed, type GuildMember, type Role } from 'discord.js';
 import { memberContentNames } from './contentRoles.js';
+import { findInviteMeRole } from './inviteMeRole.js';
 import { DATA_CENTERS } from './dataCenters.js';
 import { JOBS, type JobRole } from './jobs.js';
 import { findProgressRoles } from './progressRoles.js';
@@ -24,6 +25,7 @@ const CONTENT_FIELD = '🎮 よく遊ぶ';
 const UNSET = '未設定';
 const JOB_SEPARATOR = '・';
 const COMMENT_QUOTE = '>>> ';
+const INVITE_ME_FIELD = '🙌 お誘い';
 /** 進行度ロールがない（または色なし）ときの色 */
 const DEFAULT_COLOR = 0x99aab5;
 const JOB_ROLE_LINES: { role: JobRole; emoji: string }[] = [
@@ -53,9 +55,16 @@ export const buildProfileEmbed = (member: GuildMember, profile: Profile): EmbedB
       { name: PROGRESS_FIELD, value: progress?.name ?? UNSET, inline: true },
       { name: JOB_FIELD, value: formatJobs(profile.jobs) || UNSET },
       { name: CONTENT_FIELD, value: memberContentNames(member).join(JOB_SEPARATOR) || UNSET },
+      // 「いつでも誘って下さい」ロールを付けている人だけ（ひとことの欄は申請内容の読み取りに使うので、別の欄にする）
+      ...(hasInviteMe(member) ? [{ name: INVITE_ME_FIELD, value: 'いつでも誘ってください！' }] : []),
     )
     .setFooter({ text: member.guild.name, iconURL: member.guild.iconURL() ?? undefined })
     .setTimestamp();
+};
+
+const hasInviteMe = (member: GuildMember): boolean => {
+  const role = findInviteMeRole(member.guild);
+  return !!role && member.roles.cache.has(role.id);
 };
 
 /** 項目ごとの表示（ログに変更前・変更後を出すときにも使う） */
