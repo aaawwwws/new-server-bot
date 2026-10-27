@@ -1,8 +1,9 @@
-import { AttachmentBuilder, EmbedBuilder, channelMention, userMention, type Guild } from 'discord.js';
+import { AttachmentBuilder, EmbedBuilder, channelMention, escapeMarkdown, userMention, type Guild } from 'discord.js';
 import { pool } from './db.js';
 import { formatDuration } from './duration.js';
 import { formatFullDateTime, formatShortDateTime, jstDay } from './jst.js';
 import { MESSAGE_RETENTION_DAYS } from './logStore.js';
+import { nameById, replaceMentions } from './names.js';
 
 // 残しておいた行動ログ・発言・VCの出入りを、期間・人・キーワードで探す（管理者用）。一覧で見るか、CSVで出す
 
@@ -193,12 +194,13 @@ export const describeFilter = (filter: LogSearchFilter): string =>
   ].join(' ・ ');
 
 /** 一覧の埋め込み（新しい順） */
-export const buildSearchEmbed = (filter: LogSearchFilter, rows: LogRow[], total: number): EmbedBuilder => {
+export const buildSearchEmbed = (guild: Guild, filter: LogSearchFilter, rows: LogRow[], total: number): EmbedBuilder => {
   const lines = rows.map((row) => {
-    const who = row.userId ? userMention(row.userId) : '';
+    // 埋め込みのメンションは正しく出ないことがあるので、残しておいた名前（なければ今の名前）にする
+    const who = row.userId ? (row.userName ? `**${escapeMarkdown(row.userName)}**` : nameById(guild, row.userId)) : '';
     const where = row.channelId ? channelMention(row.channelId) : '';
     const head = `\`${formatShortDateTime(row.at)}\` **[${SOURCE_LABELS[row.source]}${row.source === 'activity' ? `: ${row.title}` : ''}]**`;
-    const body = row.source === 'activity' ? row.text : `${where} ${who}: ${row.text}`;
+    const body = row.source === 'activity' ? replaceMentions(guild, row.text) : `${where} ${who}: ${row.text}`;
     return clip(`${head} ${body.replace(/\n/g, ' ')}`, MAX_LINE_LENGTH);
   });
   const notes = [
@@ -211,7 +213,7 @@ export const buildSearchEmbed = (filter: LogSearchFilter, rows: LogRow[], total:
     .setColor(0x607d8b)
     .setTitle(`🔎 ログ検索（${total}件）`)
     .setDescription(
-      [describeFilter(filter), ...notes, '', ...(lines.length > 0 ? lines : ['見つかりませんでした。'])].join('\n').slice(0, 4096),
+      [replaceMentions(guild, describeFilter(filter)), ...notes, '', ...(lines.length > 0 ? lines : ['見つかりませんでした。'])].join('\n').slice(0, 4096),
     )
     .setFooter({ text: total > rows.length ? `新しい順に${rows.length}件だけ出しています。すべて見るには CSV で出してください` : '新しい順' });
 };

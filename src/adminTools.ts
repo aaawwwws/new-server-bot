@@ -24,9 +24,10 @@ import { formatNumber, levelFromXp } from './levels.js';
 import { adjustXp, findFirstRecordedDay, findLevelStats, findStreak, listLastActiveDays } from './levelStore.js';
 import { findJoinInvite, listRecentLogsFor } from './logStore.js';
 import { loadJoinAnnounce, loadRankingHidden } from './memberSettings.js';
+import { nameById, nameWithUsername, replaceMentions } from './names.js';
 import { describeWorld } from './profile.js';
 import { findStoredProfile, listPendingApplications } from './profileStore.js';
-import { computeRanking, isRankingExempt } from './rankings.js';
+import { computeRanking, isRankingExempt, summarizeInvites } from './rankings.js';
 import { listFinishedRecruits } from './recruitStore.js';
 import { findVcRole } from './vcRole.js';
 
@@ -79,7 +80,7 @@ export const karteModal = (): ModalBuilder =>
 export const buildMemberKarte = async (member: GuildMember, now: Date = new Date()) => {
   const { guild } = member;
   const today = jstDay(now);
-  const [stored, pending, stats, streak, lastActiveDays, hidden, announce, invite, logs, recruits, total, week] = await Promise.all([
+  const [stored, pending, stats, streak, lastActiveDays, hidden, announce, invite, logs, recruits, total, week, invites] = await Promise.all([
     findStoredProfile(guild.id, member.id),
     listPendingApplications(guild.id),
     findLevelStats(guild.id, member.id),
@@ -92,6 +93,7 @@ export const buildMemberKarte = async (member: GuildMember, now: Date = new Date
     listFinishedRecruits(guild.id, null, null),
     computeRanking(guild, 'xp', 'all', now, { changes: false }),
     computeRanking(guild, 'xp', 'week', now, { changes: false, alsoInclude: member.id }),
+    summarizeInvites(guild, member.id),
   ]);
 
   const application = pending.find((a) => a.userId === member.id);
@@ -125,7 +127,7 @@ export const buildMemberKarte = async (member: GuildMember, now: Date = new Date
     .setAuthor({ name: `${member.displayName}（${member.user.username}）`, iconURL: member.displayAvatarURL() })
     .setTitle('🗂️ メンバーの詳細')
     .setThumbnail(member.displayAvatarURL({ size: 256 }))
-    .setDescription(`${member}\nID: \`${member.id}\``)
+    .setDescription(`${nameWithUsername(member)}\nID: \`${member.id}\``)
     .addFields(
       { name: '📥 参加', value: member.joinedAt ? `${time(member.joinedAt, 'D')}（${time(member.joinedAt, 'R')}）` : '不明', inline: true },
       { name: '🕒 アカウント作成', value: `${time(member.user.createdAt, 'D')}（${time(member.user.createdAt, 'R')}）`, inline: true },
@@ -143,6 +145,14 @@ export const buildMemberKarte = async (member: GuildMember, now: Date = new Date
       { name: '🔥 連続日数', value: `${streak.current}日（最長${streak.best}日）`, inline: true },
       { name: '📣 PT募集', value: `主催 ${hosted}回・参加 ${joined}回`, inline: true },
       {
+        name: '📨 招待',
+        value: [
+          `招待して定着: ${invites.counted}人（リンクで入った ${invites.total}人）`,
+          `招待してくれた人: ${invites.inviterId ? nameById(guild, invites.inviterId) : '記録なし'}`,
+        ].join('\n'),
+        inline: true,
+      },
+      {
         name: '⚙️ 設定',
         value: [
           `VC通知: ${vcRole && member.roles.cache.has(vcRole.id) ? '受け取る' : '受け取らない'}`,
@@ -155,7 +165,9 @@ export const buildMemberKarte = async (member: GuildMember, now: Date = new Date
       { name: `🎭 ロール（${roles.length}）`, value: shorten(roles.join(' '), 1000) || 'なし' },
       {
         name: '📜 最近のログ',
-        value: logs.map((log) => `${time(log.createdAt, 'R')} **${log.title}** ${shorten(log.text.replace(/\n/g, ' '), LOG_TEXT_LENGTH)}`).join('\n') || 'なし',
+        value:
+          logs.map((log) => `${time(log.createdAt, 'R')} **${log.title}** ${shorten(replaceMentions(guild, log.text.replace(/\n/g, ' ')), LOG_TEXT_LENGTH)}`).join('\n') ||
+          'なし',
       },
     );
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -190,8 +202,8 @@ export const inactiveScreen = async (guild: Guild, days: number, now: Date = new
 
   const lines = inactive.map(({ member, last }) =>
     last
-      ? `・${member} 最後: ${formatDay(last)}（${daysAgo(today, last)}）`
-      : `・${member} 記録なし（参加: ${member.joinedAt ? time(member.joinedAt, 'D') : '不明'}）`,
+      ? `・${nameWithUsername(member)} 最後: ${formatDay(last)}（${daysAgo(today, last)}）`
+      : `・${nameWithUsername(member)} 記録なし（参加: ${member.joinedAt ? time(member.joinedAt, 'D') : '不明'}）`,
   );
   const rest = lines.length - MAX_LISTED;
   const embed = new EmbedBuilder()

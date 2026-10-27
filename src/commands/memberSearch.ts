@@ -3,6 +3,7 @@ import {
   InteractionContextType,
   MessageFlags,
   SlashCommandBuilder,
+  escapeMarkdown,
   messageLink,
   type ChatInputCommandInteraction,
 } from 'discord.js';
@@ -118,7 +119,7 @@ export const execute = async (interaction: ChatInputCommandInteraction<'cached'>
     const link =
       entry.channelId && entry.messageId ? ` ・ [プロフ](${messageLink(entry.channelId, entry.messageId, guild.id)})` : '';
     return [
-      `**${entry.profile.name}**（${member}）`,
+      `**${entry.profile.name}**（${escapeMarkdown(member.displayName)}・@${escapeMarkdown(member.user.username)}）`,
       `　${describeWorld(entry.profile)} ・ ${describeJobs(entry.profile)} ・ ${describeTime(entry.profile)}${link}`,
     ];
   });

@@ -35,6 +35,7 @@ import {
   updateMessageLog,
   type StoredMessage,
 } from './logStore.js';
+import { nameById, nameWithUsername, replaceMentions } from './names.js';
 import { ADMIN_ROLE_NAME, findAdminRole } from './permissions.js';
 
 /** 行動ログを送るチャンネルの名前（なければログは送らない。DBには残す） */
@@ -133,27 +134,33 @@ export const sendLog = async (
     const channel = findTextChannel(guild, LOG_CHANNEL_NAME);
     if (!channel || !canBotPost(channel)) return;
 
+    // 埋め込みのメンションは、読み込まれていない人だと正しく出ないので名前にして出す（DBにはメンションのまま残す）
+    const known = new Map(
+      [actor, typeof target === 'string' ? undefined : target].flatMap((who) => (who ? [[who.id, who.displayName] as const] : [])),
+    );
+    const display = (value: string): string => replaceMentions(guild, value, known);
+
     // 本文: 何があったかの一文と、「👤 ユーザー: …」のような1行ずつの情報
     const people =
       actor && showTarget && target !== undefined
-        ? [`🛠️ 実行者: ${describeUser(actor)}`, `👤 対象: ${describeUser(target)}`, `🆔 対象のID: ${targetId}`]
+        ? [`🛠️ 実行者: ${describeUser(guild, actor)}`, `👤 対象: ${describeUser(guild, target)}`, `🆔 対象のID: ${targetId}`]
         : actor
-          ? [`👤 ユーザー: ${describeUser(actor)}`, `🆔 ユーザーID: ${actor.id}`]
+          ? [`👤 ユーザー: ${describeUser(guild, actor)}`, `🆔 ユーザーID: ${actor.id}`]
           : target !== undefined
-            ? [`👤 対象: ${describeUser(target)}`, `🆔 対象のID: ${targetId}`]
+            ? [`👤 対象: ${describeUser(guild, target)}`, `🆔 対象のID: ${targetId}`]
             : [];
     const lines = [
       ...people,
       ...(details.channel ? [`📢 チャンネル: ${channelMention(details.channel.id)}`] : []),
-      ...shown.filter((field) => field.inline).map((field) => `${field.name}: ${field.value.replace(/\n/g, ' / ')}`),
+      ...shown.filter((field) => field.inline).map((field) => `${field.name}: ${display(field.value).replace(/\n/g, ' / ')}`),
     ];
     const embed = new EmbedBuilder()
       .setColor(color)
       .setTitle(title)
-      .setDescription(clip([text, ...(lines.length > 0 ? ['', ...lines] : [])].join('\n'), MAX_DESCRIPTION_LENGTH))
+      .setDescription(clip([display(text), ...(lines.length > 0 ? ['', ...lines] : [])].join('\n'), MAX_DESCRIPTION_LENGTH))
       .addFields(
         // 空の項目は送れないので除く。長すぎる項目は途中で切る
-        ...shown.filter((field) => !field.inline).map((field) => ({ name: field.name, value: clip(field.value, MAX_FIELD_LENGTH) })),
+        ...shown.filter((field) => !field.inline).map((field) => ({ name: field.name, value: clip(display(field.value), MAX_FIELD_LENGTH) })),
         ...(links.length > 0 ? [{ name: '🔗 リンク', value: links.map((link) => `[${link.label}](${link.url})`).join('\n') }] : []),
       )
       .setTimestamp();
@@ -168,11 +175,9 @@ export const sendLog = async (
   }
 };
 
-/** 「@名前（ユーザー名）」。IDしか分からない人はメンションだけ */
-const describeUser = (who: GuildMember | User | string): string => {
-  if (typeof who === 'string') return userMention(who);
-  return `${who}（${usernameOf(who)}）`;
-};
+/** 「**名前**（@ユーザー名）」。IDしか分からない人は、サーバーにいれば名前、いなければその旨 */
+const describeUser = (guild: Guild, who: GuildMember | User | string): string =>
+  typeof who === 'string' ? nameById(guild, who) : nameWithUsername(who);
 
 const usernameOf = (who: GuildMember | User): string => ('user' in who ? who.user : who).username;
 
@@ -248,7 +253,7 @@ export const logMemberJoin = async (member: GuildMember, invite: UsedInvite | nu
 const describeInvite = (invite: UsedInvite | null): string => {
   if (!invite) return '不明（1回限り・期限切れのリンク、またはBotが招待リンクを見られない設定）';
   if (invite.vanity) return `discord.gg/${invite.code}（サーバーのカスタムURL・${invite.uses}回目）`;
-  return `discord.gg/${invite.code}（作成: ${invite.inviterId ? userMention(invite.inviterId) : '不明'}・${invite.uses}回目）`;
+  return `discord.gg/${invite.code}（作成: ${invite.inviterId ? userMention(invite.inviterId) : '不明'}${invite.personal ? '・専用リンク' : ''}・${invite.uses}回目）`;
 };
 
 /** キック・BANで抜けたとき、誰がやったか（監査ログから） */

@@ -304,7 +304,7 @@ const stepScreen = (guild: Guild, userId: string, draft: RecruitDraft, step: Ste
             '投稿すると、参加者の連絡用スレッドも作ります。',
           ].join('\n'),
         ),
-        embeds: [buildRecruitEmbed({ ...draft, id: null, startsAt, hostId: userId, status: 'open' })],
+        embeds: [buildRecruitEmbed(guild, { ...draft, id: null, startsAt, hostId: userId, status: 'open' })],
         components: [
           toRow(
             button(recruitCustomId('w', 'post'), '投稿する', ButtonStyle.Success, '📣'),
@@ -794,7 +794,7 @@ const post = async (interaction: RecruitComponentInteraction, draft: RecruitDraf
   });
   const message = await channel.send({
     ...(draft.mentionRoleIds.length > 0 ? { content: `🔔 ${draft.mentionRoleIds.map(roleMention).join(' ')} 募集です！` } : {}),
-    ...buildRecruitPost(recruit),
+    ...buildRecruitPost(guild, recruit),
     allowedMentions: { roles: draft.mentionRoleIds },
   });
   recruit.messageId = message.id;

@@ -9,6 +9,7 @@ import {
   ModalBuilder,
   SlashCommandBuilder,
   UserSelectMenuBuilder,
+  codeBlock,
   type AttachmentBuilder,
   type ButtonInteraction,
   type ChatInputCommandInteraction,
@@ -23,6 +24,7 @@ import { NOTICE_CHANNEL_NAME } from '../callNotice.js';
 import { checkCharacterName } from '../characterName.js';
 import { findContentRoles, toggleContentRole } from '../contentRoles.js';
 import { DATA_CENTERS, type DataCenter } from '../dataCenters.js';
+import { ensurePersonalInvite } from '../inviteLinks.js';
 import { loadJoinAnnounce, loadRankingHidden, saveJoinAnnounce, type JoinAnnounceKey, type JoinAnnounceSettings } from '../memberSettings.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import { buildProfileEmbed, describeJobs, describeTime, describeWorld, type Profile } from '../profile.js';
@@ -54,8 +56,8 @@ import {
   refreshPostedProfile,
 } from '../profilePublish.js';
 import { findProgressRoles, setProgressRole } from '../progressRoles.js';
-import { toRankingKind } from '../rankings.js';
-import { levelScreenButtons, rankingScreen, screenPayload, setRankingHidden } from '../rankingView.js';
+import { computeRanking, isRankingExempt, summarizeInvites, toRankingKind } from '../rankings.js';
+import { levelScreenButtons, rankingId, rankingScreen, screenPayload, setRankingHidden } from '../rankingView.js';
 import { VC_ROLE_NAME, findVcRole, setVcNotice } from '../vcRole.js';
 import { buildLevelView } from './level.js';
 
@@ -79,6 +81,7 @@ const MENU_BUTTONS_PER_ROW = 3;
 const PROFILE_MENU_ID = `${CUSTOM_ID_PREFIX}menu:profile`;
 const VC_MENU_ID = `${CUSTOM_ID_PREFIX}menu:vc`;
 const LEVEL_MENU_ID = `${CUSTOM_ID_PREFIX}menu:level`;
+const INVITE_MENU_ID = `${CUSTOM_ID_PREFIX}menu:invite`;
 const LEVEL_USER_SELECT_ID = `${CUSTOM_ID_PREFIX}level-user`;
 interface JoinAnnounceItem {
   key: JoinAnnounceKey;
@@ -167,6 +170,9 @@ export const buildPanel = (): PanelPayload => {
         '**📊 レベル**',
         '自分やほかの人のレベル、サーバーのランキング（今日・今週・今月・累計）、自分の順位と歴代記録を見られます。',
         'ランキングに名前を出さない設定もここでできます。',
+        '',
+        '**📨 招待**',
+        'あなた専用の招待リンクを作れます。リンクで入った人がプロフィール登録まで進むと、招待ランキングに数えられます。',
       ].join('\n'),
     )
     .setColor(0x5865f2);
@@ -174,6 +180,7 @@ export const buildPanel = (): PanelPayload => {
     new ButtonBuilder().setCustomId(PROFILE_MENU_ID).setLabel('プロフィール').setEmoji({ name: '🪪' }).setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(VC_MENU_ID).setLabel('VC通知').setEmoji({ name: '🔔' }).setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(LEVEL_MENU_ID).setLabel('レベル').setEmoji({ name: '📊' }).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(INVITE_MENU_ID).setLabel('招待').setEmoji({ name: '📨' }).setStyle(ButtonStyle.Primary),
   );
   return { embeds: [embed], components: [row] };
 };
@@ -188,6 +195,9 @@ export const handleComponent = async (interaction: ComponentInteraction): Promis
         return;
       case 'level':
         await showAfterDefer(interaction, () => levelScreen(interaction.member, interaction.member));
+        return;
+      case 'invite':
+        await showAfterDefer(interaction, () => inviteScreen(interaction.member));
         return;
       default:
         await openProfileMenu(interaction);
@@ -224,6 +234,9 @@ export const handleComponent = async (interaction: ComponentInteraction): Promis
       await interaction.editReply(withFiles(await levelScreen(interaction.member, target)));
       return;
     }
+    case 'invite-renew':
+      await interaction.editReply(withFiles(await inviteScreen(interaction.member, { renew: true })));
+      return;
     case 'rank-hide': {
       const hidden = value === 'on';
       await setRankingHidden(interaction.member, hidden);
@@ -629,6 +642,46 @@ const levelScreen = async (viewer: GuildMember, target: GuildMember | null, note
     embeds: view.embeds,
     files: view.files,
     components,
+  };
+};
+
+/** 専用の招待リンクの画面。リンクと、連れてきた人数・招待ランキングの順位。renew ならリンクを作り直す */
+const inviteScreen = async (member: GuildMember, { renew = false } = {}): Promise<Screen> => {
+  const invite = await ensurePersonalInvite(member, { renew });
+  if (typeof invite === 'string') return { content: `⚠ ${invite}`, components: [] };
+  const [summary, ranking, hidden] = await Promise.all([
+    summarizeInvites(member.guild, member.id),
+    computeRanking(member.guild, 'invites', 'all', new Date(), { changes: false, alsoInclude: member.id }),
+    loadRankingHidden(member.guild.id, member.id),
+  ]);
+  const index = ranking.entries.findIndex((entry) => entry.member.id === member.id);
+  const rank = isRankingExempt(member)
+    ? '対象外（管理者）'
+    : hidden
+      ? '非表示（ランキングに出ない設定）'
+      : index >= 0
+        ? `${index + 1}位`
+        : 'まだなし';
+  return {
+    content: [
+      ...(renew ? ['🔄 リンクを作り直しました（前のリンクはもう使えません）。', ''] : []),
+      '📨 **あなた専用の招待リンク**',
+      invite.url,
+      '',
+      'このリンクで入った人がプロフィール登録まで進むと、あなたの招待として招待ランキングに数えられます。',
+      `・招待して定着した人: **${summary.counted}人**（リンクで入った人: ${summary.total}人）`,
+      `・招待ランキング（累計）: ${rank}`,
+      '',
+      '紹介するときの例（長押しでコピーできます）:',
+      codeBlock(`FF14のコミュニティ「${member.guild.name}」に遊びに来ませんか？ ${invite.url}`),
+      '-# 期限・回数の制限はありません。リンクが広まりすぎたときは「作り直す」で前のリンクを止められます（前のリンクで入った人も、あなたの招待のまま）。',
+    ].join('\n'),
+    components: [
+      toRow(
+        new ButtonBuilder().setCustomId(rankingId('invites', 'all', 0, 'o')).setLabel('招待ランキング').setEmoji({ name: '🏆' }).setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(customId('invite-renew')).setLabel('リンクを作り直す').setEmoji({ name: '🔄' }).setStyle(ButtonStyle.Secondary),
+      ),
+    ],
   };
 };
 

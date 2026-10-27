@@ -1,19 +1,22 @@
 import type { Collection, Guild, GuildMember } from 'discord.js';
 import { formatDuration } from './duration.js';
 import { fetchAllMembers } from './guildUtils.js';
+import { listMemberInvites } from './inviteStore.js';
 import { addDays, addMonths, dayStart, formatDay, formatMonth, jstDay, monthStart, weekStart } from './jst.js';
 import { formatNumber, levelFromXp } from './levels.js';
 import { listLevelStats, listPeriodStats, listStreaks, type LevelStats } from './levelStore.js';
 import { listRankingHiddenIds } from './memberSettings.js';
 import { ADMIN_ROLE_NAME } from './permissions.js';
+import { listStoredProfiles } from './profileStore.js';
+import { boldName } from './names.js';
 import { listFinishedRecruits } from './recruitStore.js';
 
 // ランキングの中身（何を・どの期間で数えるか、順位、昨日からの変化）と、1行ぶんの書き方
 
-export type RankingKind = 'xp' | 'messages' | 'voice' | 'reactions' | 'streak' | 'hosted' | 'joined';
+export type RankingKind = 'xp' | 'messages' | 'voice' | 'reactions' | 'streak' | 'hosted' | 'joined' | 'invites';
 export type RankingPeriod = 'day' | 'week' | 'month' | 'all';
 
-export const RANKING_KINDS: RankingKind[] = ['xp', 'messages', 'voice', 'reactions', 'streak', 'hosted', 'joined'];
+export const RANKING_KINDS: RankingKind[] = ['xp', 'messages', 'voice', 'reactions', 'streak', 'hosted', 'joined', 'invites'];
 export const RANKING_PERIODS: RankingPeriod[] = ['day', 'week', 'month', 'all'];
 
 /** periods: 期間で区切れるか（連続日数は「今」だけ） */
@@ -25,6 +28,7 @@ export const KIND_INFO: Record<RankingKind, { label: string; emoji: string; peri
   streak: { label: '連続日数', emoji: '🔥', periods: false },
   hosted: { label: '募集の主催', emoji: '📣', periods: true },
   joined: { label: '募集の参加', emoji: '🙋', periods: true },
+  invites: { label: '招待', emoji: '📨', periods: true },
 };
 
 export const PERIOD_LABELS: Record<RankingPeriod, string> = { day: '今日', week: '今週', month: '今月', all: '累計' };
@@ -119,7 +123,56 @@ const recruitScores = async (guildId: string, kind: 'hosted' | 'joined', range: 
   return new Map([...counts].map(([userId, count]) => [userId, { value: count, best: 0, tie: 0 }]));
 };
 
-const loadScores = async (guildId: string, kind: RankingKind, range: DayRange | null, today: string): Promise<Scores> => {
+/**
+ * 招待した人の数。招待リンクで入って、今もサーバーにいて、プロフィール登録（審査に通る）まで進んだ人だけを数える
+ * （サブアカウントで数を増やしにくくするため）。期間は入った日で区切る。tie は、リンクで入った人の全部の数
+ */
+const inviteScores = async (guildId: string, members: Collection<string, GuildMember>, range: DayRange | null): Promise<Scores> => {
+  const [invites, profiles] = await Promise.all([
+    listMemberInvites(guildId, range ? dayStart(range.from) : null, range ? dayStart(range.to) : null),
+    listStoredProfiles(guildId),
+  ]);
+  const registered = new Set(profiles.map((profile) => profile.userId));
+  const scores: Scores = new Map();
+  for (const invite of invites) {
+    const score = scores.get(invite.inviterId) ?? { value: 0, best: 0, tie: 0 };
+    const invitee = members.get(invite.userId);
+    score.tie++;
+    if (invitee && !invitee.user.bot && registered.has(invite.userId)) score.value++;
+    scores.set(invite.inviterId, score);
+  }
+  return scores;
+};
+
+export interface InviteSummary {
+  /** 招待して、今もいてプロフィール登録まで進んだ人 */
+  counted: number;
+  /** その人のリンクで入った人の全部 */
+  total: number;
+  /** その人を招待した人（記録がなければ null） */
+  inviterId: string | null;
+}
+
+/** 1人分の招待のまとめ（メンバーの詳細用） */
+export const summarizeInvites = async (guild: Guild, userId: string): Promise<InviteSummary> => {
+  const [members, invites, profiles] = await Promise.all([fetchAllMembers(guild), listMemberInvites(guild.id), listStoredProfiles(guild.id)]);
+  const registered = new Set(profiles.map((profile) => profile.userId));
+  const mine = invites.filter((invite) => invite.inviterId === userId);
+  return {
+    counted: mine.filter((invite) => members.get(invite.userId) && !members.get(invite.userId)?.user.bot && registered.has(invite.userId)).length,
+    total: mine.length,
+    inviterId: invites.find((invite) => invite.userId === userId)?.inviterId ?? null,
+  };
+};
+
+const loadScores = async (
+  guildId: string,
+  kind: RankingKind,
+  range: DayRange | null,
+  today: string,
+  members: Collection<string, GuildMember>,
+): Promise<Scores> => {
+  if (kind === 'invites') return inviteScores(guildId, members, range);
   if (isStatKind(kind)) {
     return statScores(range ? await listPeriodStats(guildId, range.from, range.to) : await listLevelStats(guildId), kind);
   }
@@ -174,11 +227,8 @@ export const computeRanking = async (
   const today = jstDay(now);
   const usedPeriod = KIND_INFO[kind].periods ? period : 'all';
   const range = periodRange(usedPeriod, today);
-  const [members, hidden, scores] = await Promise.all([
-    fetchAllMembers(guild),
-    listRankingHiddenIds(guild.id),
-    loadScores(guild.id, kind, range, today),
-  ]);
+  const [members, hidden] = await Promise.all([fetchAllMembers(guild), listRankingHiddenIds(guild.id)]);
+  const scores = await loadScores(guild.id, kind, range, today, members);
   const previous = options.changes === false ? null : await previousScores(guild.id, kind, usedPeriod, range, today, scores);
   const previousRanks = previous
     ? new Map(order(members, hidden, previous, options.alsoInclude).map(([member], i) => [member.id, i + 1]))
@@ -216,6 +266,8 @@ export const formatScore = (kind: RankingKind, period: RankingPeriod, entry: Pic
       return formatDuration(entry.value * 60_000);
     case 'streak':
       return `${entry.value}日連続（最長${entry.best}日）`;
+    case 'invites':
+      return `${formatNumber(entry.value)}人`;
     default:
       return `${formatNumber(entry.value)}回`;
   }
@@ -230,6 +282,8 @@ export const formatGap = (kind: RankingKind, gap: number): string => {
       return formatDuration(gap * 60_000);
     case 'streak':
       return `${gap}日`;
+    case 'invites':
+      return `${formatNumber(gap)}人`;
     default:
       return `${formatNumber(gap)}回`;
   }
@@ -244,7 +298,7 @@ export const changeMark = (change: RankingEntry['change']): string => {
 
 /** ランキングの1行。index は0から数えた順位 */
 export const rankingLine = (ranking: Pick<Ranking, 'kind' | 'period'>, entry: RankingEntry, index: number): string =>
-  `${MEDALS[index] ?? `**${index + 1}.**`} ${entry.member} ${formatScore(ranking.kind, ranking.period, entry)}${changeMark(entry.change)}`;
+  `${MEDALS[index] ?? `**${index + 1}.**`} ${boldName(entry.member)} ${formatScore(ranking.kind, ranking.period, entry)}${changeMark(entry.change)}`;
 
 /** 「✨ XPランキング（今週）」「🔥 連続日数ランキング」 */
 export const rankingTitle = (kind: RankingKind, period: RankingPeriod): string => {

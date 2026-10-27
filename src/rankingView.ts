@@ -12,6 +12,7 @@ import { formatDay, formatMonth, jstDay } from './jst.js';
 import { formatNumber } from './levels.js';
 import { findBestDayXp, findBestWeekXp, findStreak } from './levelStore.js';
 import { loadRankingHidden, saveRankingHidden } from './memberSettings.js';
+import { nameById } from './names.js';
 import { toRow, type Row } from './profileInputs.js';
 import {
   KIND_INFO,
@@ -51,7 +52,7 @@ const WIN_COUNT_LIMIT = 5;
 /** 種類のボタンの並び（1行目が発言・VCまわり、2行目がそのほか） */
 const KIND_ROWS: RankingKind[][] = [
   ['xp', 'messages', 'voice', 'reactions'],
-  ['streak', 'hosted', 'joined'],
+  ['streak', 'hosted', 'joined', 'invites'],
 ];
 const PERIOD_EMOJIS: Record<RankingPeriod, string> = { day: '📅', week: '🗓️', month: '🌙', all: '🏆' };
 
@@ -134,6 +135,7 @@ const KIND_NOTES: Partial<Record<RankingKind, string>> = {
   streak: '発言・VC・リアクションをした日が続いている日数（今日まだでも、昨日まで続いていれば途切れていない扱い）',
   hosted: '終わった募集だけを数えます（中止は数えません）',
   joined: '終わった募集で、枠に入っていた回数（待ちと中止は数えません）',
+  invites: '自分の招待リンクで入って、今もサーバーにいて、プロフィール登録まで進んだ人の数（入った日で数えます）',
 };
 
 export const rankingScreen = async (
@@ -235,13 +237,14 @@ export const myRanksScreen = async (viewer: GuildMember, note?: string, now: Dat
   // ランキングに出ない設定でも、本人には「出した場合の順位」を見せる
   const options = { changes: false, alsoInclude: viewer.id };
   const statKinds: RankingKind[] = ['xp', 'messages', 'voice', 'reactions'];
-  const [hidden, byPeriod, streakRanking, streak, hosted, joined] = await Promise.all([
+  const [hidden, byPeriod, streakRanking, streak, hosted, joined, invites] = await Promise.all([
     loadRankingHidden(guild.id, viewer.id),
     Promise.all(RANKING_PERIODS.map((period) => Promise.all(statKinds.map((kind) => computeRanking(guild, kind, period, now, options))))),
     computeRanking(guild, 'streak', 'all', now, options),
     findStreak(guild.id, viewer.id, jstDay(now)),
     computeRanking(guild, 'hosted', 'all', now, options),
     computeRanking(guild, 'joined', 'all', now, options),
+    computeRanking(guild, 'invites', 'all', now, options),
   ]);
   const place = (ranking: Ranking): string => {
     const index = ranking.entries.findIndex((entry) => entry.member.id === viewer.id);
@@ -278,6 +281,7 @@ export const myRanksScreen = async (viewer: GuildMember, note?: string, now: Dat
         inline: true,
       },
       { name: '📣 PT募集（累計）', value: `主催 ${place(hosted)}\n参加 ${place(joined)}`, inline: true },
+      { name: '📨 招待（累計）', value: place(invites), inline: true },
     )
     .setFooter({ text: '✨XP・💬発言数・🎧VCの時間・💖もらったリアクション。順位は「ランキングに出ない」設定の人と管理者を除いて数えています' });
 
@@ -313,16 +317,16 @@ export const hallOfFameScreen = async (viewer: GuildMember, now: Date = new Date
     .addFields(
       {
         name: '👑 歴代の週間1位',
-        value: weekly.map((c) => `${formatDay(c.start)}〜 <@${c.userId}> ${formatNumber(c.xp)} XP`).join('\n') || 'まだありません',
+        value: weekly.map((c) => `${formatDay(c.start)}〜 ${nameById(viewer.guild, c.userId)} ${formatNumber(c.xp)} XP`).join('\n') || 'まだありません',
       },
       {
         name: '🌟 歴代の月間MVP',
-        value: monthly.map((c) => `${formatMonth(c.start)} <@${c.userId}> ${formatNumber(c.xp)} XP`).join('\n') || 'まだありません',
+        value: monthly.map((c) => `${formatMonth(c.start)} ${nameById(viewer.guild, c.userId)} ${formatNumber(c.xp)} XP`).join('\n') || 'まだありません',
         inline: true,
       },
       {
         name: '🏅 週間1位の回数',
-        value: wins.map((w, i) => `${MEDALS[i] ?? `**${i + 1}.**`} <@${w.userId}> ${w.wins}回`).join('\n') || 'まだありません',
+        value: wins.map((w, i) => `${MEDALS[i] ?? `**${i + 1}.**`} ${nameById(viewer.guild, w.userId)} ${w.wins}回`).join('\n') || 'まだありません',
         inline: true,
       },
       {

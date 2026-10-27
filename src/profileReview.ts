@@ -19,6 +19,7 @@ import {
   type ModalSubmitInteraction,
 } from 'discord.js';
 import { sendLog, type LogDetails } from './activityLog.js';
+import { boldName } from './names.js';
 import { ensureAdmin } from './permissions.js';
 import { buildProfileEmbed, profileLogFields, type Profile } from './profile.js';
 import {
@@ -168,7 +169,7 @@ const approve = async (interaction: ButtonInteraction<'cached'>, id: string): Pr
     );
 
     await closeReview(interaction, [
-      `✅ ${interaction.user} が許可しました（${time(new Date(), 'f')}）→ ${result.message.url}`,
+      `✅ ${boldName(interaction.member)} が許可しました（${time(new Date(), 'f')}）→ ${result.message.url}`,
       ...(result.memberRole === 'failed'
         ? [`※「${MEMBER_ROLE_NAME}」ロールを付けられませんでした。Botのロールが「${MEMBER_ROLE_NAME}」より上にあるか確認してください。`]
         : []),
@@ -208,7 +209,7 @@ const reject = async (interaction: ModalMessageModalSubmitInteraction<'cached'>,
   );
 
   await closeReview(interaction, [
-    `❌ ${interaction.user} が拒否しました（${time(new Date(), 'f')}）`,
+    `❌ ${boldName(interaction.member)} が拒否しました（${time(new Date(), 'f')}）`,
     ...(reason ? [`理由: ${reason}`] : []),
     ...(dmSent ? [] : [DM_FAILED_NOTE]),
   ], RESULT_COLORS.reject);
@@ -275,7 +276,7 @@ const removeMember = async (
   }
 
   await closeReview(interaction, [
-    `${icon} ${interaction.user} が${label}しました（${time(new Date(), 'f')}）`,
+    `${icon} ${boldName(interaction.member)} が${label}しました（${time(new Date(), 'f')}）`,
     ...(reason ? [`理由: ${reason}`] : []),
     ...(dmSent ? [] : [DM_FAILED_NOTE]),
   ], RESULT_COLORS[action]);

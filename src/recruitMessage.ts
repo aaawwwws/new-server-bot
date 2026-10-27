@@ -18,6 +18,7 @@ import {
 } from 'discord.js';
 import { reportError } from './errorReporter.js';
 import { createLock } from './locks.js';
+import { nameById } from './names.js';
 import { filledCount, isFull, type RecruitConfig } from './recruitEngine.js';
 import { ROLE_EMOJIS, findPartyType, jobLabel, type PartyType } from './recruitParty.js';
 import {
@@ -86,7 +87,7 @@ const LOOKS = {
   finished: { prefix: '【終了】', color: 0x4f545c },
 } as const;
 
-export const buildRecruitEmbed = (view: RecruitView): EmbedBuilder => {
+export const buildRecruitEmbed = (guild: Guild, view: RecruitView): EmbedBuilder => {
   const look = LOOKS[view.status === 'open' && isFull(view) ? 'full' : view.status];
   return new EmbedBuilder()
     .setColor(look.color)
@@ -95,18 +96,18 @@ export const buildRecruitEmbed = (view: RecruitView): EmbedBuilder => {
     .setDescription(view.comment ? `>>> ${view.comment}` : null)
     .addFields(
       { name: '🕘 開始', value: view.startsAt ? `${time(view.startsAt, 'F')}（${time(view.startsAt, 'R')}）` : '未定' },
-      { name: '👑 主催', value: userMention(view.hostId), inline: true },
+      { name: '👑 主催', value: nameById(guild, view.hostId), inline: true },
       { name: '👥 人数', value: `${filledCount(view)} / ${view.slots.length}人`, inline: true },
       ...(view.dataCenter ? [{ name: '🌍 DC', value: view.dataCenter, inline: true }] : []),
       { name: '📋 ルール', value: view.allowDuplicateJobs ? 'ジョブ重複あり' : 'ジョブ重複なし', inline: true },
-      ...memberFields(view),
+      ...memberFields(guild, view),
     )
     .setFooter({ text: view.id ? `募集ID: ${view.id}` : 'プレビュー（まだ投稿していません）' });
 };
 
 /** 枠の一覧。長いときは項目を分ける（1項目1024文字まで） */
-const memberFields = (view: RecruitView): APIEmbedField[] => {
-  const lines = [...memberLines(view), ...waitlistLines(view)];
+const memberFields = (guild: Guild, view: RecruitView): APIEmbedField[] => {
+  const lines = [...memberLines(guild, view), ...waitlistLines(guild, view)];
   const fields: APIEmbedField[] = [];
   let current: string[] = [];
   for (const line of lines) {
@@ -120,10 +121,10 @@ const memberFields = (view: RecruitView): APIEmbedField[] => {
   return fields;
 };
 
-const memberLines = (view: RecruitView): string[] => {
+const memberLines = (guild: Guild, view: RecruitView): string[] => {
   const party = partyOf(view.party, view);
   const personNote = (p: { userId: string; job: string | null; positions: string[]; comment: string | null }) =>
-    `${p.userId === view.hostId ? '👑 ' : ''}${userMention(p.userId)}（${jobLabel(p.job)}）` +
+    `${p.userId === view.hostId ? '👑 ' : ''}${nameById(guild, p.userId)}（${jobLabel(p.job)}）` +
     (party.hasRoles && p.positions.length > 1 ? ` FLEX: ${p.positions.join('/')}` : '') +
     (p.comment ? ` 💬 ${clip(p.comment, MAX_COMMENT_IN_POST)}` : '');
 
@@ -151,9 +152,9 @@ const memberLines = (view: RecruitView): string[] => {
   return [...lines, ...(open > 0 ? [`ー あと${open}人`] : [])];
 };
 
-const waitlistLines = (view: RecruitView): string[] => {
+const waitlistLines = (guild: Guild, view: RecruitView): string[] => {
   const waiting = view.participants.filter((p) => !p.slot);
-  return waiting.length > 0 ? [`⏳ 補欠: ${waiting.map((p) => userMention(p.userId)).join(' ')}（枠が空くと自動で入ります）`] : [];
+  return waiting.length > 0 ? [`⏳ 補欠: ${waiting.map((p) => nameById(guild, p.userId)).join(' ')}（枠が空くと自動で入ります）`] : [];
 };
 
 /** 投稿のボタン。終わった募集はボタンを消す */
@@ -169,7 +170,10 @@ export const buildRecruitComponents = (recruit: Recruit): ActionRowBuilder<Butto
   return buttons.length > 0 ? [new ActionRowBuilder<ButtonBuilder>().addComponents(buttons)] : [];
 };
 
-export const buildRecruitPost = (recruit: Recruit) => ({ embeds: [buildRecruitEmbed(recruit)], components: buildRecruitComponents(recruit) });
+export const buildRecruitPost = (guild: Guild, recruit: Recruit) => ({
+  embeds: [buildRecruitEmbed(guild, recruit)],
+  components: buildRecruitComponents(recruit),
+});
 
 const recruitChannel = (guild: Guild, recruit: Recruit): GuildTextBasedChannel | undefined => {
   const channel = guild.channels.cache.get(recruit.channelId);
@@ -181,7 +185,7 @@ export const refreshRecruitPost = async (guild: Guild, recruit: Recruit): Promis
   scheduleRecruitListRefresh(guild);
   const channel = recruitChannel(guild, recruit);
   if (!channel || !recruit.messageId) return;
-  await channel.messages.edit(recruit.messageId, buildRecruitPost(recruit)).catch((error: unknown) => {
+  await channel.messages.edit(recruit.messageId, buildRecruitPost(guild, recruit)).catch((error: unknown) => {
     console.error(`募集（ID: ${recruit.id}）の投稿を更新できませんでした:`, error);
   });
 };
@@ -290,7 +294,7 @@ export const buildRecruitListEmbed = (guild: Guild, recruits: Recruit[]): EmbedB
     return [
       `${mark} **${title}**`,
       `　🕘 ${time(recruit.startsAt, 'f')}（${time(recruit.startsAt, 'R')}）・👥 ${filledCount(recruit)}/${recruit.slots.length}人` +
-        `${recruit.dataCenter ? `・🌍 ${recruit.dataCenter}` : ''}${state}・👑 ${userMention(recruit.hostId)}`,
+        `${recruit.dataCenter ? `・🌍 ${recruit.dataCenter}` : ''}${state}・👑 ${nameById(guild, recruit.hostId)}`,
     ].join('\n');
   });
   return new EmbedBuilder()

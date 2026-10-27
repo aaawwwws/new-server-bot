@@ -83,5 +83,5 @@ export const replyWithSearch = async (
     return;
   }
   const { rows, total } = await searchLogs(interaction.guild.id, filter, LIST_LIMIT);
-  await interaction.editReply({ embeds: [buildSearchEmbed(filter, rows, total)], allowedMentions: { parse: [] } });
+  await interaction.editReply({ embeds: [buildSearchEmbed(interaction.guild, filter, rows, total)], allowedMentions: { parse: [] } });
 };

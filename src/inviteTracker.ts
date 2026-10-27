@@ -12,6 +12,8 @@ export interface UsedInvite {
   uses: number;
   /** サーバーのカスタムURL（discord.gg/〇〇）か */
   vanity: boolean;
+  /** Botが作ったメンバー専用のリンクか（inviterId はリンクの持ち主） */
+  personal?: boolean;
 }
 
 interface InviteSnapshot {
@@ -87,6 +89,8 @@ export const handleInviteCreate = async (invite: Invite): Promise<void> => {
   const { guild } = invite;
   if (!guild || !('members' in guild)) return;
   snapshots.get(guild.id)?.set(invite.code, toSnapshot(invite));
+  // Bot自身が作った専用リンクは、作ったときに持ち主の名前でログを残しているので、ここでは残さない
+  if (invite.inviterId && invite.inviterId === guild.members.me?.id) return;
   const inviter = invite.inviterId ? (guild.members.cache.get(invite.inviterId) ?? invite.inviter ?? undefined) : undefined;
   await sendLog(guild, 'invite', `${invite.inviterId ? userMention(invite.inviterId) : '誰か'} が招待リンクを作りました`, inviter, {
     title: '招待リンク作成',

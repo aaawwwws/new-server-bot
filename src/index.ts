@@ -42,6 +42,7 @@ import * as settingsPanel from './commands/settingsPanel.js';
 import { closeDatabase, initDatabase } from './db.js';
 import { reportError, setErrorReportClient } from './errorReporter.js';
 import { loadAllGuildSettings } from './guildSettings.js';
+import { backfillMemberInvites, recordMemberInvite, resolveInviteOwner } from './inviteStore.js';
 import { findUsedInvite, handleInviteCreate, handleInviteDelete, loadInvites } from './inviteTracker.js';
 import { handleMessageXp, handleReactionXp, startVoiceXp } from './levels.js';
 import { deleteOldReactions } from './levelStore.js';
@@ -204,6 +205,10 @@ const prepareGuild = async (guild: Guild): Promise<void> => {
   await loadInvites(guild).catch((error: unknown) => {
     reportError(`「${guild.name}」の招待リンクを読めませんでした`, error, guild);
   });
+  // 招待ランキングの記録を、これまでの参加のログからも作る（何度動かしても同じ）
+  await backfillMemberInvites(guild.id).catch((error: unknown) => {
+    reportError(`「${guild.name}」の招待の記録を作れませんでした`, error, guild);
+  });
   // VCの出入りの記録を、今VCにいる人に合わせる（Botが止まっていた間の出入りの分）
   await reconcileVoiceSessions(guild).catch((error: unknown) => {
     reportError(`「${guild.name}」のVCの記録を合わせられませんでした`, error, guild);
@@ -309,10 +314,17 @@ process.on('unhandledRejection', (reason) => {
 });
 
 client.on(Events.GuildMemberAdd, (member) => {
-  // どの招待リンクで入ったかも載せる（調べられなければ「不明」）
+  // どの招待リンクで入ったかも載せる（調べられなければ「不明」）。招待ランキングのために、誰が連れてきたかも残す
   findUsedInvite(member.guild)
     .catch(() => null)
-    .then((invite) => logMemberJoin(member, invite))
+    // Botが作った専用リンクなら、作成者（Bot）ではなく持ち主が連れてきた人
+    .then((invite) => resolveInviteOwner(member.guild.id, invite).catch(() => invite))
+    .then(async (invite) => {
+      await recordMemberInvite(member, invite).catch((error: unknown) => {
+        reportError('招待の記録を残せませんでした', error, member.guild);
+      });
+      await logMemberJoin(member, invite);
+    })
     .catch((error: unknown) => {
       reportError('参加のログを残せませんでした', error);
     });

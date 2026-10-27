@@ -151,6 +151,30 @@ export const initDatabase = async (): Promise<void> => {
       updated_at              timestamptz NOT NULL DEFAULT now()
     )
   `);
+  // 誰の招待リンクで入ったか（招待ランキング用）。入り直しても、最初に連れてきた人のまま
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS member_invites (
+      guild_id    text        NOT NULL,
+      user_id     text        NOT NULL,
+      inviter_id  text        NOT NULL,
+      invite_code text        NOT NULL,
+      joined_at   timestamptz NOT NULL,
+      PRIMARY KEY (guild_id, user_id)
+    )
+  `);
+  // Botがメンバーごとに作った専用の招待リンク（Botが作るとリンクの作成者がBotになるので、誰のリンクかをここで覚える）。
+  // retired_at は作り直したときに付ける（前のリンクで入った人も、持ち主に数える）
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invite_links (
+      guild_id   text        NOT NULL,
+      code       text        NOT NULL,
+      user_id    text        NOT NULL,
+      channel_id text        NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      retired_at timestamptz,
+      PRIMARY KEY (guild_id, code)
+    )
+  `);
   // 週1回の管理レポートを、どの週（その週の月曜）の分まで投稿したか
   await pool.query(`
     CREATE TABLE IF NOT EXISTS admin_reports (

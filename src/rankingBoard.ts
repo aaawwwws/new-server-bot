@@ -15,6 +15,7 @@ import { pool } from './db.js';
 import { reportError } from './errorReporter.js';
 import { fetchAllMembers } from './guildUtils.js';
 import { addDays, addMonths, formatDay, formatMonth, jstDay, monthStart, weekStart } from './jst.js';
+import { boldName } from './names.js';
 import { computeRanking, rankXpBetween, rankingLine, type RankingEntry } from './rankings.js';
 import { hasResults, recordResults, type ResultPeriod } from './rankingStore.js';
 import { boardButtons } from './rankingView.js';
@@ -223,7 +224,7 @@ const giveTopRole = async (guild: Guild, period: ResultPeriod, winners: GuildMem
       if (!member.roles.cache.has(role.id)) await member.roles.add(role, `${name}の経験値ランキング上位`);
     }
     return winners.length > 0
-      ? `${winners.map((member) => `${member}`).join(' ')} に付けました（前に付いていた人からは外しました）。`
+      ? `${winners.map(boldName).join(' ')} に付けました（前に付いていた人からは外しました）。`
       : `${name}は記録がなかったので、誰にも付けていません。`;
   } catch (error) {
     console.error(`「${guild.name}」の「${roleName}」ロールを付け替えられませんでした:`, error);

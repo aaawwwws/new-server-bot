@@ -8,7 +8,9 @@ import { reportError } from './errorReporter.js';
 import { canBotPost, fetchAllMembers, findTextChannel } from './guildUtils.js';
 import { addDays, dayStart, formatDay, jstDay, toJst, weekStart } from './jst.js';
 import { formatNumber } from './levels.js';
+import { nameById } from './names.js';
 import { listActiveDayCounts, listPeriodStats } from './levelStore.js';
+import { listMemberInvites } from './inviteStore.js';
 import { countLogsByKind } from './logStore.js';
 import { countApplications, listStoredProfiles } from './profileStore.js';
 import { countRecruitsByStatus } from './recruitStore.js';
@@ -24,6 +26,8 @@ const REPORT_HOUR = 9;
 const REGULAR_DAYS = 4;
 /** 未登録のままの人を数えるときの、入ってからの日数 */
 const UNREGISTERED_DAYS = 7;
+/** 招待で連れてきた人が多い人を、何人まで出すか */
+const TOP_INVITERS = 3;
 /** 来なくなった人を名前で出す人数 */
 const MAX_NAMED = 10;
 /** これより古いバックアップしかなければ知らせる */
@@ -54,7 +58,7 @@ export const readBackupStatus = async (dir: string = BACKUP_DIR): Promise<Backup
 export const buildAdminReport = async (guild: Guild, from: string, to: string, title: string, now: Date = new Date()): Promise<EmbedBuilder> => {
   const fromDate = dayStart(from);
   const toDate = dayStart(to);
-  const [members, logs, applications, active, previousActive, stats, recruits, profiles, backup] = await Promise.all([
+  const [members, logs, applications, active, previousActive, stats, recruits, profiles, backup, invites] = await Promise.all([
     fetchAllMembers(guild),
     countLogsByKind(guild.id, ['join', 'leave'], fromDate, toDate),
     countApplications(guild.id, fromDate, toDate),
@@ -64,6 +68,7 @@ export const buildAdminReport = async (guild: Guild, from: string, to: string, t
     countRecruitsByStatus(guild.id, fromDate, toDate),
     listStoredProfiles(guild.id),
     readBackupStatus(),
+    listMemberInvites(guild.id, fromDate, toDate),
   ]);
   const humans = members.filter((member) => !member.user.bot);
   const activeMembers = [...active].filter(([id]) => humans.has(id));
@@ -74,6 +79,10 @@ export const buildAdminReport = async (guild: Guild, from: string, to: string, t
   const unregisteredSince = now.getTime() - UNREGISTERED_DAYS * 24 * 60 * 60_000;
   const unregistered = humans.filter((member) => !registered.has(member.id) && (member.joinedTimestamp ?? 0) < unregisteredSince).size;
   const sum = (key: 'messageCount' | 'voiceMinutes' | 'reactionsGiven') => stats.reduce((total, s) => total + s[key], 0);
+  // 期間中に招待リンクで入った人を、連れてきた人ごとに数える（多い順に何人か出す）
+  const byInviter = new Map<string, number>();
+  for (const invite of invites) byInviter.set(invite.inviterId, (byInviter.get(invite.inviterId) ?? 0) + 1);
+  const topInviters = [...byInviter].sort((a, b) => b[1] - a[1]).slice(0, TOP_INVITERS);
 
   return new EmbedBuilder()
     .setColor(COLOR)
@@ -96,7 +105,12 @@ export const buildAdminReport = async (guild: Guild, from: string, to: string, t
         value:
           stopped.length === 0
             ? 'いません'
-            : `${stopped.slice(0, MAX_NAMED).map((id) => `<@${id}>`).join(' ')}${stopped.length > MAX_NAMED ? ` ほか${stopped.length - MAX_NAMED}人` : ''}\n-# その前の7日は来ていて、この7日は来ていない人`,
+            : `${stopped.slice(0, MAX_NAMED).map((id) => nameById(guild, id)).join(' ')}${stopped.length > MAX_NAMED ? ` ほか${stopped.length - MAX_NAMED}人` : ''}\n-# その前の7日は来ていて、この7日は来ていない人`,
+      },
+      {
+        name: '📨 招待で入った人',
+        value: `${invites.length}人${topInviters.length > 0 ? `（${topInviters.map(([id, count]) => `${nameById(guild, id)} ${count}人`).join('・')}）` : ''}`,
+        inline: true,
       },
       { name: `🆕 未登録のまま${UNREGISTERED_DAYS}日以上`, value: `${unregistered}人`, inline: true },
       {

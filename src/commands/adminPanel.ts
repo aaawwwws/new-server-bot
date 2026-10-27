@@ -44,6 +44,7 @@ import {
 } from '../adminTools.js';
 import { fetchAllMembers } from '../guildUtils.js';
 import { addDays, formatShortDateTime, jstDay } from '../jst.js';
+import { nameById, nameWithUsername } from '../names.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import { profileLogFields } from '../profile.js';
 import { ADMIN_ROLE_NAME, ensureAdmin } from '../permissions.js';
@@ -510,7 +511,7 @@ const pendingListEmbed = async (interaction: ButtonInteraction<'cached'>): Promi
     const link = application.review
       ? ` [申請を見る](${messageLink(application.review.channelId, application.review.messageId, interaction.guild.id)})`
       : '';
-    return `・<@${application.userId}> ${application.characterName}（${time(application.createdAt, 'R')}）${link}`;
+    return `・${nameById(interaction.guild, application.userId)} ${application.characterName}（${time(application.createdAt, 'R')}）${link}`;
   });
   return listEmbed(`📋 審査中の申請（${pending.length}件）`, lines, '審査中の申請はありません。');
 };
@@ -528,7 +529,7 @@ const unregisteredListEmbed = async (interaction: ButtonInteraction<'cached'>): 
     .sort((a, b) => (a.joinedTimestamp ?? 0) - (b.joinedTimestamp ?? 0));
   const lines = unregistered.map(
     (member) =>
-      `・${member}（参加: ${member.joinedAt ? time(member.joinedAt, 'R') : '不明'}）${applying.has(member.id) ? ' 📝 申請中' : ''}`,
+      `・${nameWithUsername(member)}（参加: ${member.joinedAt ? time(member.joinedAt, 'R') : '不明'}）${applying.has(member.id) ? ' 📝 申請中' : ''}`,
   );
   return listEmbed(`👥 未登録のメンバー（${unregistered.length}人）`, lines, '未登録のメンバーはいません。');
 };
