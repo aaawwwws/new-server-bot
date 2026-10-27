@@ -59,6 +59,7 @@ import { submitApplication } from '../profileReview.js';
 import { findContentRoles, toggleContentRole } from '../contentRoles.js';
 import { findProgressRoles, setProgressRole } from '../progressRoles.js';
 import { INVITE_ME_ROLE_NAME, findInviteMeRole, setInviteMe } from '../inviteMeRole.js';
+import { rewardInviter } from '../inviteRewards.js';
 import { VC_ROLE_NAME, findVcRole, setVcNotice } from '../vcRole.js';
 
 // customId は「profile:<操作>:<値>」の形。
@@ -489,6 +490,11 @@ const register = async (interaction: ComponentInteraction, target: GuildMember, 
 
   const result = await publishProfile(channel, target, profile);
   drafts.delete(draftKey(interaction.user.id, target.id));
+  // 招待で入った人なら、連れてきた人にお礼のXPを渡す（失敗しても登録は止めない）
+  const reward = await rewardInviter(target).catch((error: unknown) => {
+    console.error('招待のご褒美を渡せませんでした:', error);
+    return null;
+  });
 
   const verb = result.updated ? '更新' : '登録';
   const roleNote = memberRoleNote(result.memberRole);
@@ -508,6 +514,7 @@ const register = async (interaction: ComponentInteraction, target: GuildMember, 
       fields: [
         ...profileLogFields(profile),
         ...(result.memberRole === 'added' ? [{ name: `🏷️ 「${MEMBER_ROLE_NAME}」ロール`, value: '付けました', inline: true }] : []),
+        ...(reward ? [{ name: '📨 招待のご褒美', value: `${reward.inviter} に ${reward.xp} XP`, inline: true }] : []),
       ],
       links: [{ label: 'プロフィールを見る', url: result.message.url }],
     },

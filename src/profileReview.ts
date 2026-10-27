@@ -19,6 +19,7 @@ import {
   type ModalSubmitInteraction,
 } from 'discord.js';
 import { sendLog, type LogDetails } from './activityLog.js';
+import { rewardInviter } from './inviteRewards.js';
 import { boldName } from './names.js';
 import { ensureAdmin } from './permissions.js';
 import { buildProfileEmbed, profileLogFields, type Profile } from './profile.js';
@@ -158,6 +159,11 @@ const approve = async (interaction: ButtonInteraction<'cached'>, id: string): Pr
       return;
     }
 
+    // 招待で入った人なら、連れてきた人にお礼のXPを渡す（失敗しても許可は止めない）
+    const reward = await rewardInviter(member).catch((error: unknown) => {
+      console.error('招待のご褒美を渡せませんでした:', error);
+      return null;
+    });
     const dmSent = await notifyApplicant(
       interaction.client,
       application.userId,
@@ -182,6 +188,7 @@ const approve = async (interaction: ButtonInteraction<'cached'>, id: string): Pr
         ...profileLogFields(application.profile),
         { name: `🏷️ 「${MEMBER_ROLE_NAME}」ロール`, value: MEMBER_ROLE_RESULTS[result.memberRole], inline: true },
         { name: '✉️ 申請者へのDM', value: dmSent ? '送りました' : '送れませんでした', inline: true },
+        ...(reward ? [{ name: '📨 招待のご褒美', value: `${reward.inviter} に ${reward.xp} XP`, inline: true }] : []),
       ],
       links: [
         { label: 'プロフィールを見る', url: result.message.url },

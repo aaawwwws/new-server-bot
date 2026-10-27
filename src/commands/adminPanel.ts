@@ -29,6 +29,12 @@ import {
   KARTE_BUTTON_ID,
   KARTE_LOGS_PREFIX,
   KARTE_MODAL_ID,
+  WELCOME_BUTTON_ID,
+  WELCOME_EDIT_ID,
+  WELCOME_MODAL_ID,
+  WELCOME_OFF_ID,
+  WELCOME_ON_ID,
+  WELCOME_TEST_ID,
   XP_ADJUST_BUTTON_ID,
   XP_ADJUST_FOR_PREFIX,
   XP_ADJUST_MODAL_ID,
@@ -39,9 +45,16 @@ import {
   inactiveScreen,
   karteModal,
   saveXpChannels,
+  sendWelcomeTest,
+  setWelcomeEnabled,
+  setWelcomeMessage,
+  welcomeMessageFrom,
+  welcomeModal,
+  welcomeScreen,
   xpAdjustModal,
   xpChannelsScreen,
 } from '../adminTools.js';
+import { loadWelcomeSettings } from '../guildSettings.js';
 import { fetchAllMembers } from '../guildUtils.js';
 import { addDays, formatShortDateTime, jstDay } from '../jst.js';
 import { nameById, nameWithUsername } from '../names.js';
@@ -149,6 +162,7 @@ export const buildPanel = (): PanelPayload => {
         '**審査中の申請**: まだ許可・拒否していない申請の一覧',
         '**未登録のメンバー**: 入ったまま、プロフィールを登録していない人の一覧',
         `**プロフィールを削除**: プロフィールと「${PROFILE_CHANNEL_NAME}」の投稿を削除します`,
+        '**入った人への案内**: 入った人にDMで送る案内（プロフ登録・設定・PT募集への行き方）。送る・送らないと、一言を変えられます',
         '',
         '__**🔎 調べる**__',
         '**メンバーの詳細**: 1人の参加日・招待リンク・プロフィール・レベル・最後に来た日・設定・ロール・最近のログをまとめて見ます',
@@ -168,6 +182,7 @@ export const buildPanel = (): PanelPayload => {
     panelButton(PENDING_BUTTON_ID, '審査中の申請', '📋', ButtonStyle.Secondary),
     panelButton(UNREGISTERED_BUTTON_ID, '未登録のメンバー', '👥', ButtonStyle.Secondary),
     panelButton(DELETE_BUTTON_ID, 'プロフィールを削除', '🗑️', ButtonStyle.Danger),
+    panelButton(WELCOME_BUTTON_ID, '入った人への案内', '👋', ButtonStyle.Secondary),
   );
   const lookupRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     panelButton(KARTE_BUTTON_ID, 'メンバーの詳細', '🗂️', ButtonStyle.Secondary),
@@ -228,6 +243,26 @@ export const handleButton = async (interaction: ButtonInteraction<'cached'>): Pr
       const today = jstDay();
       const embed = await buildAdminReport(interaction.guild, addDays(today, -6), addDays(today, 1), '📊 管理レポート（直近7日）');
       await interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
+      return;
+    }
+    case WELCOME_BUTTON_ID:
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      await interaction.editReply(await welcomeScreen(interaction.guild));
+      return;
+    case WELCOME_ON_ID:
+    case WELCOME_OFF_ID: {
+      await interaction.deferUpdate();
+      const note = await setWelcomeEnabled(interaction.member, interaction.customId === WELCOME_ON_ID);
+      await interaction.editReply(await welcomeScreen(interaction.guild, note));
+      return;
+    }
+    case WELCOME_EDIT_ID:
+      await interaction.showModal(welcomeModal((await loadWelcomeSettings(interaction.guild.id)).message));
+      return;
+    case WELCOME_TEST_ID: {
+      await interaction.deferUpdate();
+      const note = await sendWelcomeTest(interaction.member);
+      await interaction.editReply(await welcomeScreen(interaction.guild, note));
       return;
     }
   }
@@ -294,6 +329,17 @@ export const handleModalSubmit = async (interaction: ModalSubmitInteraction<'cac
         reason: interaction.fields.getTextInputValue(REASON_INPUT_ID).trim(),
       });
       await interaction.editReply({ content, allowedMentions: { parse: [] } });
+      return;
+    }
+    case WELCOME_MODAL_ID: {
+      // 案内の画面から開いたモーダルなので、その画面を書き換える
+      if (interaction.isFromMessage()) {
+        await interaction.deferUpdate();
+      } else {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      }
+      const note = await setWelcomeMessage(interaction.member, welcomeMessageFrom(interaction.fields));
+      await interaction.editReply(await welcomeScreen(interaction.guild, note));
       return;
     }
   }

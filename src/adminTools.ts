@@ -18,7 +18,7 @@ import {
 import { sendLog } from './activityLog.js';
 import { formatDuration } from './duration.js';
 import { fetchAllMembers } from './guildUtils.js';
-import { loadXpExcludedChannels, saveXpExcludedChannels } from './guildSettings.js';
+import { loadWelcomeSettings, loadXpExcludedChannels, saveWelcomeSettings, saveXpExcludedChannels } from './guildSettings.js';
 import { addDays, dayStart, formatDay, jstDay } from './jst.js';
 import { formatNumber, levelFromXp } from './levels.js';
 import { adjustXp, findFirstRecordedDay, findLevelStats, findStreak, listLastActiveDays } from './levelStore.js';
@@ -31,6 +31,7 @@ import { computeRanking, isRankingExempt, summarizeInvites } from './rankings.js
 import { listFinishedRecruits } from './recruitStore.js';
 import { findInviteMeRole } from './inviteMeRole.js';
 import { findVcRole } from './vcRole.js';
+import { buildWelcomeEmbed } from './welcome.js';
 
 // 管理パネルの「メンバーの詳細」「来ていない人」「XPの調整」「XPなしチャンネル」の中身。
 // customId は管理パネルと同じ「admin:」で始まり、管理パネルが受け取ってここを呼ぶ
@@ -348,6 +349,98 @@ export const saveXpChannels = async (admin: GuildMember, channelIds: string[]): 
     ],
   });
   return `✅ 保存しました（追加 ${added.length}・外した ${removed.length}）。`;
+};
+
+// ---- 入った人への案内
+
+export const WELCOME_BUTTON_ID = `${PREFIX}welcome`;
+export const WELCOME_ON_ID = `${PREFIX}welcome-on`;
+export const WELCOME_OFF_ID = `${PREFIX}welcome-off`;
+export const WELCOME_EDIT_ID = `${PREFIX}welcome-edit`;
+export const WELCOME_TEST_ID = `${PREFIX}welcome-test`;
+export const WELCOME_MODAL_ID = `${PREFIX}welcome-submit`;
+const WELCOME_MESSAGE_INPUT_ID = 'welcomeMessage';
+const MAX_WELCOME_MESSAGE = 1000;
+
+/** 今の設定と、入った人に届く案内のプレビュー。note は操作の結果 */
+export const welcomeScreen = async (guild: Guild, note?: string) => {
+  const settings = await loadWelcomeSettings(guild.id);
+  const preview = await buildWelcomeEmbed(guild, settings);
+  const toggle = (on: boolean): ButtonBuilder =>
+    new ButtonBuilder()
+      .setCustomId(on ? WELCOME_ON_ID : WELCOME_OFF_ID)
+      .setLabel(on ? '送る' : '送らない')
+      .setStyle(settings.enabled === on ? ButtonStyle.Primary : ButtonStyle.Secondary);
+  return {
+    content: [
+      ...(note ? [note, ''] : []),
+      `👋 **入った人への案内**（今は **${settings.enabled ? '送る' : '送らない'}**。青いボタンが今の設定です）`,
+      '入った人に、DMで下の案内を送ります。DMを受け付けていない人には届きません（届いたかは参加のログに出ます）。',
+      'リンクは、設置してあるプロフィール・設定・PT募集のパネルにつながります。',
+    ].join('\n'),
+    embeds: [preview],
+    components: [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(toggle(true), toggle(false)),
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(WELCOME_EDIT_ID).setLabel('一言を変える').setEmoji({ name: '✏️' }).setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(WELCOME_TEST_ID).setLabel('自分に送ってみる').setEmoji({ name: '📩' }).setStyle(ButtonStyle.Secondary),
+      ),
+    ],
+    allowedMentions: { parse: [] },
+  };
+};
+
+export const welcomeModal = (current: string): ModalBuilder => {
+  const input = new TextInputBuilder()
+    .setCustomId(WELCOME_MESSAGE_INPUT_ID)
+    .setStyle(TextInputStyle.Paragraph)
+    .setMaxLength(MAX_WELCOME_MESSAGE)
+    .setRequired(false)
+    .setPlaceholder('例: ゆるく遊んでいるサーバーです。気軽に話しかけてください！');
+  // 今の一言を入れた状態で開く（空のときは入れない）
+  if (current) input.setValue(current);
+  return new ModalBuilder()
+    .setCustomId(WELCOME_MODAL_ID)
+    .setTitle('入った人への案内')
+    .addLabelComponents(
+      new LabelBuilder().setLabel('一言（任意）').setDescription('案内の一番上に出ます。空にすると決まった文だけになります').setTextInputComponent(input),
+    );
+};
+
+export const welcomeMessageFrom = (fields: { getTextInputValue: (id: string) => string }): string =>
+  fields.getTextInputValue(WELCOME_MESSAGE_INPUT_ID).trim();
+
+/** 送る・送らないを変えて、ログに残す。結果の一言を返す */
+export const setWelcomeEnabled = async (admin: GuildMember, enabled: boolean): Promise<string> => {
+  const settings = await loadWelcomeSettings(admin.guild.id);
+  if (settings.enabled === enabled) return '変更はありませんでした。';
+  await saveWelcomeSettings(admin.guild.id, { ...settings, enabled });
+  void sendLog(admin.guild, 'welcome', `${admin} が入った人への案内を${enabled ? '送るようにしました' : '止めました'}`, admin);
+  return enabled ? '✅ 入った人に案内を送るようにしました。' : '🛑 入った人への案内を止めました。';
+};
+
+/** 一言を変えて、ログに残す。結果の一言を返す */
+export const setWelcomeMessage = async (admin: GuildMember, message: string): Promise<string> => {
+  const settings = await loadWelcomeSettings(admin.guild.id);
+  if (settings.message === message) return '変更はありませんでした。';
+  await saveWelcomeSettings(admin.guild.id, { ...settings, message });
+  void sendLog(admin.guild, 'welcome', `${admin} が入った人への案内の一言を変えました`, admin, {
+    fields: [
+      { name: '変更前', value: settings.message || '（なし）' },
+      { name: '変更後', value: message || '（なし）' },
+    ],
+  });
+  return '✅ 一言を変えました。';
+};
+
+/** 押した管理者に、入った人と同じ案内をDMで送る */
+export const sendWelcomeTest = async (admin: GuildMember): Promise<string> => {
+  const settings = await loadWelcomeSettings(admin.guild.id);
+  const embed = await buildWelcomeEmbed(admin.guild, settings);
+  return admin.send({ content: '（テスト）入った人には、こう届きます。', embeds: [embed] }).then(
+    () => '📩 DMに送りました。',
+    () => '⚠ DMを送れませんでした。Discordの「プライバシー設定」で、このサーバーのメンバーからのDMを許可しているか確認してください。',
+  );
 };
 
 // ---- 小物

@@ -26,6 +26,7 @@ import { findContentRoles, toggleContentRole } from '../contentRoles.js';
 import { DATA_CENTERS, type DataCenter } from '../dataCenters.js';
 import { ensurePersonalInvite } from '../inviteLinks.js';
 import { INVITE_ME_ROLE_NAME, findInviteMeRole, setInviteMe } from '../inviteMeRole.js';
+import { INVITE_REWARD_XP } from '../inviteRewards.js';
 import { loadJoinAnnounce, loadRankingHidden, saveJoinAnnounce, type JoinAnnounceKey, type JoinAnnounceSettings } from '../memberSettings.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import { buildProfileEmbed, describeJobs, describeTime, describeWorld, type Profile } from '../profile.js';
@@ -174,7 +175,7 @@ export const buildPanel = (): PanelPayload => {
         'ランキングに名前を出さない設定もここでできます。',
         '',
         '**📨 招待**',
-        'あなた専用の招待リンクを作れます。リンクで入った人がプロフィール登録まで進むと、招待ランキングに数えられます。',
+        `あなた専用の招待リンクを作れます。リンクで入った人がプロフィール登録まで進むと、招待ランキングに数えられ、お礼に ${INVITE_REWARD_XP} XP がもらえます。`,
         '',
         '**🙌 いつでも誘って**',
         `「${INVITE_ME_ROLE_NAME}」ロールを自分で付け外しできます。付けるとプロフィールに出て、PT募集でこのロールに声をかけてもらえます。`,
@@ -713,7 +714,7 @@ const inviteScreen = async (member: GuildMember, { renew = false } = {}): Promis
       '📨 **あなた専用の招待リンク**',
       invite.url,
       '',
-      'このリンクで入った人がプロフィール登録まで進むと、あなたの招待として招待ランキングに数えられます。',
+      `このリンクで入った人がプロフィール登録まで進むと、あなたの招待として招待ランキングに数えられ、お礼に **${INVITE_REWARD_XP} XP** がもらえます（1人につき1回）。`,
       `・招待して定着した人: **${summary.counted}人**（リンクで入った人: ${summary.total}人）`,
       `・招待ランキング（累計）: ${rank}`,
       '',

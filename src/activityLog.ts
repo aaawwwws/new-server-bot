@@ -66,6 +66,7 @@ const LOG_STYLES = {
   voice: { label: 'VC', color: 0x3498db },
   vcNotice: { label: 'VC通知の設定', color: 0x3498db },
   inviteMe: { label: '「いつでも誘って」の設定', color: 0x57f287 },
+  welcome: { label: '入った人への案内', color: 0x57f287 },
   level: { label: 'レベル・ランキング', color: 0xf1c40f },
   messageDelete: { label: 'メッセージ削除', color: 0xe67e22 },
   messageEdit: { label: 'メッセージ編集', color: 0xf1c40f },
@@ -229,8 +230,8 @@ export const ensureLogChannel = async (guild: Guild): Promise<TextChannel | null
 
 // ---- 参加・退出
 
-/** サーバーへの参加をログに残す。invite は使われた招待リンク（分からなければ null） */
-export const logMemberJoin = async (member: GuildMember, invite: UsedInvite | null = null): Promise<void> => {
+/** サーバーへの参加をログに残す。invite は使われた招待リンク（分からなければ null）、welcome は案内のDMを送れたか */
+export const logMemberJoin = async (member: GuildMember, invite: UsedInvite | null = null, welcome: string | null = null): Promise<void> => {
   const { user } = member;
   const isNewAccount = Date.now() - user.createdTimestamp < NEW_ACCOUNT_DAYS * DAY_MS;
   await sendLog(
@@ -246,6 +247,7 @@ export const logMemberJoin = async (member: GuildMember, invite: UsedInvite | nu
         { name: '🕒 アカウント作成', value: describeDate(user.createdAt), inline: true },
         { name: '🔗 招待リンク', value: describeInvite(invite), inline: true },
         { name: '👥 メンバー数', value: `${member.guild.memberCount}人`, inline: true },
+        ...(welcome ? [{ name: '✉️ 案内のDM', value: welcome, inline: true }] : []),
       ],
     },
   );

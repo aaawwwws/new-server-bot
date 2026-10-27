@@ -10,6 +10,8 @@ export interface MemberInvite {
   inviterId: string;
   code: string;
   joinedAt: Date;
+  /** 招待のご褒美を渡した時刻（まだなら null） */
+  rewardedAt?: Date | null;
 }
 
 interface InviteRow {
@@ -17,13 +19,17 @@ interface InviteRow {
   inviter_id: string;
   invite_code: string;
   joined_at: Date;
+  rewarded_at: Date | null;
 }
+
+const INVITE_COLUMNS = 'user_id, inviter_id, invite_code, joined_at, rewarded_at';
 
 const toInvite = (row: InviteRow): MemberInvite => ({
   userId: row.user_id,
   inviterId: row.inviter_id,
   code: row.invite_code,
   joinedAt: row.joined_at,
+  rewardedAt: row.rewarded_at,
 });
 
 /** 記録する。もう記録がある人（入り直した人）は前のまま。初めての記録なら true */
@@ -48,7 +54,7 @@ export const recordMemberInvite = async (member: GuildMember, invite: UsedInvite
 /** from〜to に入った人の記録（null なら区切らない） */
 export const listMemberInvites = async (guildId: string, from: Date | null = null, to: Date | null = null): Promise<MemberInvite[]> => {
   const { rows } = await pool.query<InviteRow>(
-    `SELECT user_id, inviter_id, invite_code, joined_at FROM member_invites
+    `SELECT ${INVITE_COLUMNS} FROM member_invites
       WHERE guild_id = $1 AND ($2::timestamptz IS NULL OR joined_at >= $2) AND ($3::timestamptz IS NULL OR joined_at < $3)
       ORDER BY joined_at`,
     [guildId, from, to],
@@ -58,12 +64,21 @@ export const listMemberInvites = async (guildId: string, from: Date | null = nul
 
 /** その人を招待した人（記録がなければ null） */
 export const findInviter = async (guildId: string, userId: string): Promise<MemberInvite | null> => {
-  const { rows } = await pool.query<InviteRow>(
-    'SELECT user_id, inviter_id, invite_code, joined_at FROM member_invites WHERE guild_id = $1 AND user_id = $2',
-    [guildId, userId],
-  );
+  const { rows } = await pool.query<InviteRow>(`SELECT ${INVITE_COLUMNS} FROM member_invites WHERE guild_id = $1 AND user_id = $2`, [
+    guildId,
+    userId,
+  ]);
   const [row] = rows;
   return row ? toInvite(row) : null;
+};
+
+/** 招待のご褒美を渡す権利を取る（まだ渡していなければ記録して true）。同時に2回呼ばれても1回だけ true */
+export const claimInviteReward = async (guildId: string, userId: string): Promise<boolean> => {
+  const { rowCount } = await pool.query(
+    'UPDATE member_invites SET rewarded_at = now() WHERE guild_id = $1 AND user_id = $2 AND rewarded_at IS NULL',
+    [guildId, userId],
+  );
+  return rowCount === 1;
 };
 
 // ---- Botが作った、メンバー専用の招待リンク

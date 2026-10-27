@@ -59,6 +59,7 @@ import { INVITE_ME_ROLE_NAME, ensureInviteMeRole } from './inviteMeRole.js';
 import { VC_ROLE_NAME, ensureVcRole } from './vcRole.js';
 import { handleVoiceStateUpdate } from './voiceJoinNotice.js';
 import * as voiceStatus from './voiceStatus.js';
+import { WELCOME_RESULT_LABELS, sendWelcome } from './welcome.js';
 import { startBoostCache } from './xpBoost.js';
 
 const commands = [
@@ -332,7 +333,12 @@ client.on(Events.GuildMemberAdd, (member) => {
       await recordMemberInvite(member, invite).catch((error: unknown) => {
         reportError('招待の記録を残せませんでした', error, member.guild);
       });
-      await logMemberJoin(member, invite);
+      // 入った人に、DMで「まず何をすればいいか」を送る（送れたかどうかも参加のログに載せる）
+      const welcome = await sendWelcome(member).catch((error: unknown) => {
+        reportError('入った人への案内を送れませんでした', error, member.guild);
+        return 'failed' as const;
+      });
+      await logMemberJoin(member, invite, welcome ? WELCOME_RESULT_LABELS[welcome] : null);
     })
     .catch((error: unknown) => {
       reportError('参加のログを残せませんでした', error);
