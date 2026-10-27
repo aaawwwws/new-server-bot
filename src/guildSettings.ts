@@ -50,6 +50,21 @@ export const saveWelcomeSettings = async (guildId: string, settings: WelcomeSett
   );
 };
 
+// ---- 申請の自動許可（申請のたびに読む）
+
+export const loadAutoApprove = async (guildId: string): Promise<boolean> => {
+  const { rows } = await pool.query<{ auto_approve: boolean }>('SELECT auto_approve FROM guild_settings WHERE guild_id = $1', [guildId]);
+  return rows[0]?.auto_approve ?? false;
+};
+
+export const saveAutoApprove = async (guildId: string, on: boolean): Promise<void> => {
+  await pool.query(
+    `INSERT INTO guild_settings (guild_id, auto_approve) VALUES ($1, $2)
+     ON CONFLICT (guild_id) DO UPDATE SET auto_approve = EXCLUDED.auto_approve, updated_at = now()`,
+    [guildId, on],
+  );
+};
+
 /** 起動時に、全サーバーの設定を読み込む */
 export const loadAllGuildSettings = async (client: Client<true>): Promise<void> => {
   for (const guild of client.guilds.cache.values()) {

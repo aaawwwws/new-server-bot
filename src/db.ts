@@ -162,20 +162,11 @@ export const initDatabase = async (): Promise<void> => {
       PRIMARY KEY (guild_id, user_id)
     )
   `);
-  // 招待のご褒美（連れてきた人がプロフィール登録まで進んだら、連れてきた人にXP）を渡した時刻。
-  // 列を足したときだけ、この機能より前に登録まで進んだ人の分は渡したことにする（さかのぼって渡さない）
-  const { rows: rewardColumn } = await pool.query(
-    "SELECT 1 FROM information_schema.columns WHERE table_name = 'member_invites' AND column_name = 'rewarded_at'",
-  );
-  if (rewardColumn.length === 0) {
-    await pool.query('ALTER TABLE member_invites ADD COLUMN rewarded_at timestamptz');
-    await pool.query(
-      'UPDATE member_invites mi SET rewarded_at = now() FROM profiles p WHERE p.guild_id = mi.guild_id AND p.user_id = mi.user_id',
-    );
-  }
   // 入った人へのDMの案内。welcome_message は管理者が足す一言（空なら決まった文だけ）
   await pool.query('ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS welcome_enabled boolean NOT NULL DEFAULT true');
   await pool.query("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS welcome_message text NOT NULL DEFAULT ''");
+  // プロフィールの申請を、管理者の確認なしで自動で許可するか（最初はしない）
+  await pool.query('ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS auto_approve boolean NOT NULL DEFAULT false');
   // Botがメンバーごとに作った専用の招待リンク（Botが作るとリンクの作成者がBotになるので、誰のリンクかをここで覚える）。
   // retired_at は作り直したときに付ける（前のリンクで入った人も、持ち主に数える）
   await pool.query(`

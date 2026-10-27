@@ -19,7 +19,6 @@ import {
   type ModalSubmitInteraction,
 } from 'discord.js';
 import { sendLog, type LogDetails } from './activityLog.js';
-import { rewardInviter } from './inviteRewards.js';
 import { boldName } from './names.js';
 import { ensureAdmin } from './permissions.js';
 import { buildProfileEmbed, profileLogFields, type Profile } from './profile.js';
@@ -96,6 +95,57 @@ export const submitApplication = async (member: GuildMember, profile: Profile): 
   return true;
 };
 
+export type AutoApproveResult = { ok: true; result: PublishResult } | { ok: false; reason: string };
+
+/**
+ * 自動許可がオンのときの申請。管理者の確認なしで、すぐ「プロフ」に投稿して正規メンバーロールを付ける。
+ * 申請の記録は「許可済み」として残し、確認チャンネルにはお知らせだけ（ボタンなし）を送る
+ */
+export const autoApproveApplication = async (member: GuildMember, profile: Profile): Promise<AutoApproveResult> => {
+  const { guild } = member;
+  const profileChannel = findProfileChannel(guild);
+  if (!profileChannel) {
+    return { ok: false, reason: `「${PROFILE_CHANNEL_NAME}」チャンネルが見つからないため登録できません。管理者に作成してもらってから、もう一度「登録する」を押してください。` };
+  }
+
+  const kind = (await findStoredProfile(guild.id, member.id)) ? '登録内容の変更' : '新規';
+  // 投稿に失敗したときに「許可済み」の記録だけ残らないよう、投稿できてから申請を記録する
+  const result = await publishProfile(profileChannel, member, profile);
+  const { id, superseded } = await createApplication(guild.id, member.id, profile);
+  await decideApplication(id, 'approved', guild.client.user.id, null);
+
+  // 管理者が気づけるよう、確認チャンネルにお知らせだけ送る（審査のボタンは付けない）
+  const reviewChannel = findReviewChannel(guild);
+  const notice = reviewChannel
+    ? await reviewChannel
+        .send({
+          content: `${member}`,
+          embeds: [
+            buildProfileEmbed(member, profile)
+              .setAuthor({ name: `✅ 自動で許可しました（${kind}）` })
+              .setColor(RESULT_COLORS.approve),
+          ],
+          allowedMentions: { parse: [] },
+        })
+        .catch(() => null)
+    : null;
+  if (notice) await setReviewMessage(id, { channelId: notice.channelId, messageId: notice.id });
+  for (const old of superseded) {
+    await closeSupersededReview(guild, old);
+  }
+
+  void sendLog(guild, 'approve', `${member} のプロフィールを自動で許可しました（${kind}）`, member, {
+    title: '申請の自動許可',
+    fields: [
+      { name: '📝 種類', value: kind, inline: true },
+      { name: `🏷️ 「${MEMBER_ROLE_NAME}」ロール`, value: MEMBER_ROLE_RESULTS[result.memberRole], inline: true },
+      ...profileLogFields(profile),
+    ],
+    links: [{ label: 'プロフィールを見る', url: result.message.url }],
+  });
+  return { ok: true, result };
+};
+
 export const handleButton = async (interaction: ButtonInteraction<'cached'>): Promise<void> => {
   const [, action, id] = interaction.customId.split(':');
   if (!id || !/^\d+$/.test(id)) return;
@@ -159,11 +209,6 @@ const approve = async (interaction: ButtonInteraction<'cached'>, id: string): Pr
       return;
     }
 
-    // 招待で入った人なら、連れてきた人にお礼のXPを渡す（失敗しても許可は止めない）
-    const reward = await rewardInviter(member).catch((error: unknown) => {
-      console.error('招待のご褒美を渡せませんでした:', error);
-      return null;
-    });
     const dmSent = await notifyApplicant(
       interaction.client,
       application.userId,
@@ -188,7 +233,6 @@ const approve = async (interaction: ButtonInteraction<'cached'>, id: string): Pr
         ...profileLogFields(application.profile),
         { name: `🏷️ 「${MEMBER_ROLE_NAME}」ロール`, value: MEMBER_ROLE_RESULTS[result.memberRole], inline: true },
         { name: '✉️ 申請者へのDM', value: dmSent ? '送りました' : '送れませんでした', inline: true },
-        ...(reward ? [{ name: '📨 招待のご褒美', value: `${reward.inviter} に ${reward.xp} XP`, inline: true }] : []),
       ],
       links: [
         { label: 'プロフィールを見る', url: result.message.url },

@@ -23,6 +23,9 @@ import {
 import { sendLog } from '../activityLog.js';
 import { buildAdminReport } from '../adminReport.js';
 import {
+  AUTO_APPROVE_BUTTON_ID,
+  AUTO_APPROVE_OFF_ID,
+  AUTO_APPROVE_ON_ID,
   DEFAULT_INACTIVE_DAYS,
   INACTIVE_DAYS,
   INACTIVE_PREFIX,
@@ -41,11 +44,13 @@ import {
   XP_CHANNELS_BUTTON_ID,
   XP_CHANNELS_SELECT_ID,
   applyXpAdjustment,
+  autoApproveScreen,
   buildMemberKarte,
   inactiveScreen,
   karteModal,
   saveXpChannels,
   sendWelcomeTest,
+  setAutoApprove,
   setWelcomeEnabled,
   setWelcomeMessage,
   welcomeMessageFrom,
@@ -162,6 +167,9 @@ export const buildPanel = (): PanelPayload => {
         '**審査中の申請**: まだ許可・拒否していない申請の一覧',
         '**未登録のメンバー**: 入ったまま、プロフィールを登録していない人の一覧',
         `**プロフィールを削除**: プロフィールと「${PROFILE_CHANNEL_NAME}」の投稿を削除します`,
+        '',
+        '__**⚙️ 設定**__',
+        '**申請の自動許可**: プロフィールの申請を、管理者の確認なしですぐ許可するかどうか',
         '**入った人への案内**: 入った人にDMで送る案内（プロフ登録・設定・PT募集への行き方）。送る・送らないと、一言を変えられます',
         '',
         '__**🔎 調べる**__',
@@ -182,6 +190,9 @@ export const buildPanel = (): PanelPayload => {
     panelButton(PENDING_BUTTON_ID, '審査中の申請', '📋', ButtonStyle.Secondary),
     panelButton(UNREGISTERED_BUTTON_ID, '未登録のメンバー', '👥', ButtonStyle.Secondary),
     panelButton(DELETE_BUTTON_ID, 'プロフィールを削除', '🗑️', ButtonStyle.Danger),
+  );
+  const settingsRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    panelButton(AUTO_APPROVE_BUTTON_ID, '申請の自動許可', '✅', ButtonStyle.Secondary),
     panelButton(WELCOME_BUTTON_ID, '入った人への案内', '👋', ButtonStyle.Secondary),
   );
   const lookupRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -195,7 +206,7 @@ export const buildPanel = (): PanelPayload => {
     panelButton(XP_ADJUST_BUTTON_ID, 'XPの調整', '✏️', ButtonStyle.Secondary),
     panelButton(XP_CHANNELS_BUTTON_ID, 'XPなしチャンネル', '🚫', ButtonStyle.Secondary),
   );
-  return { embeds: [embed], components: [memberRow, lookupRow, levelRow] };
+  return { embeds: [embed], components: [memberRow, settingsRow, lookupRow, levelRow] };
 };
 
 export const handleButton = async (interaction: ButtonInteraction<'cached'>): Promise<void> => {
@@ -263,6 +274,17 @@ export const handleButton = async (interaction: ButtonInteraction<'cached'>): Pr
       await interaction.deferUpdate();
       const note = await sendWelcomeTest(interaction.member);
       await interaction.editReply(await welcomeScreen(interaction.guild, note));
+      return;
+    }
+    case AUTO_APPROVE_BUTTON_ID:
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      await interaction.editReply(await autoApproveScreen(interaction.guild));
+      return;
+    case AUTO_APPROVE_ON_ID:
+    case AUTO_APPROVE_OFF_ID: {
+      await interaction.deferUpdate();
+      const note = await setAutoApprove(interaction.member, interaction.customId === AUTO_APPROVE_ON_ID);
+      await interaction.editReply(await autoApproveScreen(interaction.guild, note));
       return;
     }
   }

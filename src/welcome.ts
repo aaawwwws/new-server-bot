@@ -1,5 +1,5 @@
 import { EmbedBuilder, messageLink, type Guild, type GuildMember } from 'discord.js';
-import { loadWelcomeSettings, type WelcomeSettings } from './guildSettings.js';
+import { loadAutoApprove, loadWelcomeSettings, type WelcomeSettings } from './guildSettings.js';
 import { listPanels, type PanelKind } from './panels.js';
 import { MEMBER_ROLE_NAME } from './profilePublish.js';
 
@@ -22,8 +22,8 @@ const panelLink = (guild: Guild, panels: Awaited<ReturnType<typeof listPanels>>,
 
 /** 案内の中身（送るときと、管理パネルのプレビューで共通） */
 export const buildWelcomeEmbed = async (guild: Guild, settings: WelcomeSettings): Promise<EmbedBuilder> => {
-  const panels = await listPanels(guild.id);
-  const go = (kind: PanelKind, label: string): string => {
+  const [panels, autoApprove] = await Promise.all([listPanels(guild.id), loadAutoApprove(guild.id)]);
+  const go =(kind: PanelKind, label: string): string => {
     const link = panelLink(guild, panels, kind);
     return link ? `\n→ [${label}](${link})` : '';
   };
@@ -35,7 +35,7 @@ export const buildWelcomeEmbed = async (guild: Guild, settings: WelcomeSettings)
     .addFields(
       {
         name: '1️⃣ プロフィールを登録',
-        value: `「プロフィールを作成」ボタンから、キャラクター名・ワールド・ジョブなどを登録します。管理者が確認したら「${MEMBER_ROLE_NAME}」になれます。${go('profile', 'プロフィール登録へ')}`,
+        value: `「プロフィールを作成」ボタンから、キャラクター名・ワールド・ジョブなどを登録します。${autoApprove ? '登録するとすぐ' : '管理者が確認したら'}「${MEMBER_ROLE_NAME}」になれます。${go('profile', 'プロフィール登録へ')}`,
       },
       {
         name: '2️⃣ 自分の設定',

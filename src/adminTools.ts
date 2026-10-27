@@ -18,7 +18,14 @@ import {
 import { sendLog } from './activityLog.js';
 import { formatDuration } from './duration.js';
 import { fetchAllMembers } from './guildUtils.js';
-import { loadWelcomeSettings, loadXpExcludedChannels, saveWelcomeSettings, saveXpExcludedChannels } from './guildSettings.js';
+import {
+  loadAutoApprove,
+  loadWelcomeSettings,
+  loadXpExcludedChannels,
+  saveAutoApprove,
+  saveWelcomeSettings,
+  saveXpExcludedChannels,
+} from './guildSettings.js';
 import { addDays, dayStart, formatDay, jstDay } from './jst.js';
 import { formatNumber, levelFromXp } from './levels.js';
 import { adjustXp, findFirstRecordedDay, findLevelStats, findStreak, listLastActiveDays } from './levelStore.js';
@@ -26,6 +33,7 @@ import { findJoinInvite, listRecentLogsFor } from './logStore.js';
 import { loadJoinAnnounce, loadRankingHidden } from './memberSettings.js';
 import { nameById, nameWithUsername, replaceMentions } from './names.js';
 import { describeWorld } from './profile.js';
+import { MEMBER_ROLE_NAME, PROFILE_CHANNEL_NAME, REVIEW_CHANNEL_NAME } from './profilePublish.js';
 import { findStoredProfile, listPendingApplications } from './profileStore.js';
 import { computeRanking, isRankingExempt, summarizeInvites } from './rankings.js';
 import { listFinishedRecruits } from './recruitStore.js';
@@ -441,6 +449,44 @@ export const sendWelcomeTest = async (admin: GuildMember): Promise<string> => {
     () => '📩 DMに送りました。',
     () => '⚠ DMを送れませんでした。Discordの「プライバシー設定」で、このサーバーのメンバーからのDMを許可しているか確認してください。',
   );
+};
+
+// ---- 申請の自動許可
+
+export const AUTO_APPROVE_BUTTON_ID = `${PREFIX}auto-approve`;
+export const AUTO_APPROVE_ON_ID = `${PREFIX}auto-approve-on`;
+export const AUTO_APPROVE_OFF_ID = `${PREFIX}auto-approve-off`;
+
+/** 自動許可のオン・オフの画面（今の設定を青く出す）。note は操作の結果 */
+export const autoApproveScreen = async (guild: Guild, note?: string) => {
+  const [on, pending] = await Promise.all([loadAutoApprove(guild.id), listPendingApplications(guild.id)]);
+  const toggle = (value: boolean): ButtonBuilder =>
+    new ButtonBuilder()
+      .setCustomId(value ? AUTO_APPROVE_ON_ID : AUTO_APPROVE_OFF_ID)
+      .setLabel(value ? '自動で許可する' : '管理者が確認する')
+      .setStyle(on === value ? ButtonStyle.Primary : ButtonStyle.Secondary);
+  return {
+    content: [
+      ...(note ? [note, ''] : []),
+      `✅ **申請の自動許可**（今は **${on ? '自動で許可する' : '管理者が確認する'}**。青いボタンが今の設定です）`,
+      '',
+      `**自動で許可する**: プロフィールの入力が終わると、管理者の確認なしで、すぐ「${PROFILE_CHANNEL_NAME}」に投稿して「${MEMBER_ROLE_NAME}」ロールを付けます。`,
+      `「${REVIEW_CHANNEL_NAME}」チャンネルには、自動で許可したお知らせだけが届きます（あとから気になる人がいたら、管理パネルの「プロフィールを削除」で外せます）。`,
+      `**管理者が確認する**: これまでどおり、「${REVIEW_CHANNEL_NAME}」チャンネルの「許可する」を押すまで登録されません。`,
+      ...(on && pending.length > 0
+        ? ['', `※ 自動許可にする前に届いた審査中の申請（${pending.length}件）は、「${REVIEW_CHANNEL_NAME}」チャンネルで手で許可・拒否してください。`]
+        : []),
+    ].join('\n'),
+    components: [new ActionRowBuilder<ButtonBuilder>().addComponents(toggle(true), toggle(false))],
+  };
+};
+
+/** 自動許可を切り替えて、ログに残す。結果の一言を返す */
+export const setAutoApprove = async (admin: GuildMember, on: boolean): Promise<string> => {
+  if ((await loadAutoApprove(admin.guild.id)) === on) return '変更はありませんでした。';
+  await saveAutoApprove(admin.guild.id, on);
+  void sendLog(admin.guild, 'autoApprove', `${admin} が申請を${on ? '自動で許可するようにしました' : '管理者が確認するように戻しました'}`, admin);
+  return on ? '✅ 申請を自動で許可するようにしました。' : '✅ 申請を管理者が確認するように戻しました。';
 };
 
 // ---- 小物

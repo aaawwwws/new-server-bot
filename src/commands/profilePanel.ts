@@ -55,11 +55,11 @@ import {
   publishProfile,
   type MemberRoleResult,
 } from '../profilePublish.js';
-import { submitApplication } from '../profileReview.js';
+import { autoApproveApplication, submitApplication } from '../profileReview.js';
 import { findContentRoles, toggleContentRole } from '../contentRoles.js';
 import { findProgressRoles, setProgressRole } from '../progressRoles.js';
+import { loadAutoApprove } from '../guildSettings.js';
 import { INVITE_ME_ROLE_NAME, findInviteMeRole, setInviteMe } from '../inviteMeRole.js';
-import { rewardInviter } from '../inviteRewards.js';
 import { VC_ROLE_NAME, findVcRole, setVcNotice } from '../vcRole.js';
 
 // customId は「profile:<操作>:<値>」の形。
@@ -86,6 +86,8 @@ interface WizardContext {
   target: GuildMember;
   /** 管理者が代わりに登録しているか。最後が「申請する」ではなく、審査なしの「登録する」になる */
   byAdmin: boolean;
+  /** 申請の自動許可がオンか。本人の登録でも、最後が審査なしの「登録する」になる */
+  autoApprove: boolean;
 }
 interface ModalInput extends NameAndCommentInput {
   /** 管理者の登録で選ばれたメンバー */
@@ -150,9 +152,10 @@ export const buildPanel = (guild: Guild): PanelPayload => {
         '**登録する内容**',
         ...items.map((item, i) => `${i + 1}. ${item}`),
         '',
-        '入力が終わったら「申請する」を押してください。管理者が確認して許可すると、',
-        `${profileChannel ?? `「${PROFILE_CHANNEL_NAME}」`} に投稿され「${MEMBER_ROLE_NAME}」ロールが付きます。結果は DM でお知らせします。`,
-        '登録済みの人がもう一度押すと、内容を変更して申請し直せます。',
+        // 自動許可のオン・オフで変わらない書き方にする（パネルは起動時にしか作り直さないため）
+        '入力が終わったら、最後のボタン（「申請する」か「登録する」）を押してください。',
+        `管理者が確認して許可すると（自動許可のときはすぐに）、${profileChannel ?? `「${PROFILE_CHANNEL_NAME}」`} に投稿され「${MEMBER_ROLE_NAME}」ロールが付きます。管理者の確認があるときは、結果を DM でお知らせします。`,
+        '登録済みの人がもう一度押すと、内容を変更できます。',
       ].join('\n'),
     )
     .setColor(0x5865f2);
@@ -219,7 +222,11 @@ export const handleComponent = async (interaction: ComponentInteraction): Promis
     await interaction.editReply({ content: '登録しようとしているメンバーが、もうサーバーにいません。', embeds: [], components: [] });
     return;
   }
-  const ctx: WizardContext = { target, byAdmin: Boolean(targetId) };
+  const ctx: WizardContext = {
+    target,
+    byAdmin: Boolean(targetId),
+    autoApprove: !targetId && (await loadAutoApprove(interaction.guild.id)),
+  };
   const key = draftKey(interaction.user.id, target.id);
 
   await withLock(key, async () => {
@@ -322,6 +329,8 @@ export const handleComponent = async (interaction: ComponentInteraction): Promis
         }
         if (ctx.byAdmin) {
           await register(interaction, ctx.target, profile);
+        } else if (ctx.autoApprove) {
+          await registerAutomatically(interaction, ctx.target, profile);
         } else {
           await apply(interaction, ctx.target, profile);
         }
@@ -382,13 +391,14 @@ export const handleModalSubmit = async (interaction: ModalSubmitInteraction<'cac
     // 管理者の登録は今の内容が入っていない状態から入力するので、空欄なら今のひとことを残す
     comment: input.comment || (byAdmin ? (current?.comment ?? '') : ''),
   };
-  const ctx: WizardContext = { target, byAdmin };
+  const ctx: WizardContext = { target, byAdmin, autoApprove: !byAdmin && (await loadAutoApprove(interaction.guild.id)) };
   drafts.set(draftKey(interaction.user.id, target.id), profile);
 
   const step = firstStep(ctx, profile);
-  const intro = byAdmin
-    ? `最後まで進んで「登録する」を押すと、審査なしで「${PROFILE_CHANNEL_NAME}」チャンネルに投稿されます。`
-    : `最後まで進んで申請すると、管理者が確認したあと、下のプレビューが「${PROFILE_CHANNEL_NAME}」チャンネルに投稿されます。`;
+  const intro =
+    byAdmin || ctx.autoApprove
+      ? `最後まで進んで「登録する」を押すと、すぐ下のプレビューが「${PROFILE_CHANNEL_NAME}」チャンネルに投稿されます。`
+      : `最後まで進んで申請すると、管理者が確認したあと、下のプレビューが「${PROFILE_CHANNEL_NAME}」チャンネルに投稿されます。`;
   await interaction.editReply({
     content: withHeader(ctx, `${intro}\n${step.content}`),
     embeds: [buildProfileEmbed(target, profile)],
@@ -477,6 +487,26 @@ const apply = async (interaction: ComponentInteraction, member: GuildMember, pro
   });
 };
 
+/** 自動許可がオンのときの本人の登録の最後。管理者の確認なしで、すぐプロフチャンネルに投稿し、正規メンバーロールを付ける */
+const registerAutomatically = async (interaction: ComponentInteraction, member: GuildMember, profile: Profile): Promise<void> => {
+  const outcome = await autoApproveApplication(member, profile);
+  if (!outcome.ok) {
+    // 入力画面は残して、チャンネル作成後にもう一度押せるようにする
+    await interaction.editReply({ content: outcome.reason });
+    return;
+  }
+  drafts.delete(draftKey(interaction.user.id, member.id));
+  const roleNote = memberRoleNote(outcome.result.memberRole);
+  await interaction.editReply({
+    content: [
+      `✅ 登録しました！「${PROFILE_CHANNEL_NAME}」チャンネルに投稿しました: ${outcome.result.message.url}`,
+      ...(roleNote ? [roleNote] : []),
+    ].join('\n'),
+    embeds: [buildProfileEmbed(member, profile)],
+    components: [],
+  });
+};
+
 /** 管理者の登録の最後。審査なしでプロフチャンネルに投稿し、正規メンバーロールを付ける */
 const register = async (interaction: ComponentInteraction, target: GuildMember, profile: Profile): Promise<void> => {
   const channel = findProfileChannel(interaction.guild);
@@ -490,11 +520,6 @@ const register = async (interaction: ComponentInteraction, target: GuildMember, 
 
   const result = await publishProfile(channel, target, profile);
   drafts.delete(draftKey(interaction.user.id, target.id));
-  // 招待で入った人なら、連れてきた人にお礼のXPを渡す（失敗しても登録は止めない）
-  const reward = await rewardInviter(target).catch((error: unknown) => {
-    console.error('招待のご褒美を渡せませんでした:', error);
-    return null;
-  });
 
   const verb = result.updated ? '更新' : '登録';
   const roleNote = memberRoleNote(result.memberRole);
@@ -514,7 +539,6 @@ const register = async (interaction: ComponentInteraction, target: GuildMember, 
       fields: [
         ...profileLogFields(profile),
         ...(result.memberRole === 'added' ? [{ name: `🏷️ 「${MEMBER_ROLE_NAME}」ロール`, value: '付けました', inline: true }] : []),
-        ...(reward ? [{ name: '📨 招待のご褒美', value: `${reward.inviter} に ${reward.xp} XP`, inline: true }] : []),
       ],
       links: [{ label: 'プロフィールを見る', url: result.message.url }],
     },
@@ -682,11 +706,11 @@ const stepAfter = (ctx: WizardContext, from: 'job' | 'content' | 'vc', profile: 
   }
 };
 
-/** 本人は「申請する」で審査へ、管理者は「登録する」でそのまま投稿 */
+/** 本人は「申請する」で審査へ、管理者（と自動許可のときの本人）は「登録する」でそのまま投稿 */
 const finishButton = (ctx: WizardContext): ButtonBuilder =>
   new ButtonBuilder().setCustomId(customId(ctx, 'apply')).setLabel(finishLabel(ctx)).setEmoji({ name: '📨' }).setStyle(ButtonStyle.Success);
 
-const finishLabel = (ctx: WizardContext): string => (ctx.byAdmin ? '登録する' : '申請する');
+const finishLabel = (ctx: WizardContext): string => (ctx.byAdmin || ctx.autoApprove ? '登録する' : '申請する');
 
 /** このサーバーで使う手順。進行度・コンテンツ・「VC」・「いつでも誘って下さい」のロールがなければ、その手順を飛ばす */
 const availableSteps = (guild: Guild): StepName[] =>
