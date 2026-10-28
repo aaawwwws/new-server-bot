@@ -28,12 +28,13 @@ import { ensurePersonalInvite } from '../inviteLinks.js';
 import { INVITE_ME_ROLE_NAME, findInviteMeRole, setInviteMe } from '../inviteMeRole.js';
 import { loadJoinAnnounce, loadRankingHidden, saveJoinAnnounce, type JoinAnnounceKey, type JoinAnnounceSettings } from '../memberSettings.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
-import { buildProfileEmbed, describeJobs, describeTime, describeWorld, type Profile } from '../profile.js';
+import { RECENT_LABEL, buildProfileEmbed, describeJobs, describeTime, describeWorld, type Profile } from '../profile.js';
 import {
   COMMENT_INPUT_ID,
   END_HOURS,
   FIRST_NAME_INPUT_ID,
   LAST_NAME_INPUT_ID,
+  RECENT_INPUT_ID,
   START_HOURS,
   dataCenterRows,
   hourSelect,
@@ -41,6 +42,7 @@ import {
   nameAndCommentLabels,
   parseHour,
   progressRows,
+  recentLabel,
   contentRows,
   toRow,
   toRows,
@@ -66,6 +68,7 @@ import { buildLevelView } from './level.js';
 // 選んでいる途中の値（ジョブ・活動時間）はBotに持たず、画面のボタン・セレクトメニューから読むので、再起動しても続きから操作できる
 export const CUSTOM_ID_PREFIX = 'settings:';
 const NAME_MODAL_ID = `${CUSTOM_ID_PREFIX}name-submit`;
+const RECENT_MODAL_ID = `${CUSTOM_ID_PREFIX}recent-submit`;
 /** ログに載せるひとことの長さ */
 const MAX_COMMENT_IN_LOG = 100;
 
@@ -77,8 +80,9 @@ const PROFILE_ITEMS = [
   { key: 'time', label: '活動時間', emoji: '🕘' },
   { key: 'jobs', label: 'ジョブ', emoji: '⚔️' },
   { key: 'content', label: 'コンテンツ', emoji: '🎮' },
+  { key: 'recent', label: RECENT_LABEL, emoji: '🕹️' },
 ] as const;
-const MENU_BUTTONS_PER_ROW = 3;
+const MENU_BUTTONS_PER_ROW = 4;
 const PROFILE_MENU_ID = `${CUSTOM_ID_PREFIX}menu:profile`;
 const VC_MENU_ID = `${CUSTOM_ID_PREFIX}menu:vc`;
 const LEVEL_MENU_ID = `${CUSTOM_ID_PREFIX}menu:level`;
@@ -325,8 +329,20 @@ export const handleComponent = async (interaction: ComponentInteraction): Promis
   }
 };
 
-/** 名前・ひとことのモーダルの送信 */
+/** 名前・ひとこと、最近やっていることのモーダルの送信 */
 export const handleModalSubmit = async (interaction: ModalSubmitInteraction<'cached'>): Promise<void> => {
+  if (interaction.customId === RECENT_MODAL_ID) {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const recent = interaction.fields.getTextInputValue(RECENT_INPUT_ID).trim();
+    await saveChange(
+      interaction,
+      (profile) => {
+        profile.recent = recent;
+      },
+      (before, after) => changeLine(RECENT_LABEL, shortComment(before.recent), shortComment(after.recent)),
+    );
+    return;
+  }
   if (interaction.customId !== NAME_MODAL_ID) return;
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -416,6 +432,11 @@ const openItem = async (interaction: ComponentInteraction, item: string | undefi
       return;
     case 'content':
       await show(interaction, contentScreen(interaction.member));
+      return;
+    case 'recent':
+      await interaction.showModal(
+        new ModalBuilder().setCustomId(RECENT_MODAL_ID).setTitle(`${RECENT_LABEL}を変更`).addLabelComponents(recentLabel(current.recent)),
+      );
       return;
   }
 };

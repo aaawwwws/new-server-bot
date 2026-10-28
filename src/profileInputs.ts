@@ -23,6 +23,9 @@ export type Row = ActionRowBuilder<MessageActionRowComponentBuilder>;
 export const FIRST_NAME_INPUT_ID = 'firstName';
 export const LAST_NAME_INPUT_ID = 'lastName';
 export const COMMENT_INPUT_ID = 'comment';
+export const RECENT_INPUT_ID = 'recent';
+/** 最近やっていることの長さ */
+const MAX_RECENT_LENGTH = 200;
 /** 活動時間の「指定しない」 */
 export const NO_TIME = 'none';
 export const START_HOURS = Array.from({ length: 24 }, (_, i) => i);
@@ -67,6 +70,18 @@ export const nameAndCommentLabels = (input: NameAndCommentInput, commentDescript
       .setTextInputComponent(nameInput(LAST_NAME_INPUT_ID, '例: Yamada', input.lastName)),
     commentLabel,
   ];
+};
+
+/** 最近やっているゲーム・コンテンツの入力欄（任意） */
+export const recentLabel = (value: string, description = 'FF14以外のゲームもOK'): LabelBuilder => {
+  const input = new TextInputBuilder()
+    .setCustomId(RECENT_INPUT_ID)
+    .setStyle(TextInputStyle.Paragraph)
+    .setPlaceholder('例: 零式の練習、ギャザクラでお金稼ぎ、モンハン')
+    .setMaxLength(MAX_RECENT_LENGTH)
+    .setRequired(false);
+  if (value) input.setValue(value);
+  return new LabelBuilder().setLabel('最近やっているゲーム・コンテンツ（任意）').setDescription(description).setTextInputComponent(input);
 };
 
 /** コンテンツロールのボタン。付いているロールは青く表示する */

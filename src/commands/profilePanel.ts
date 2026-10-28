@@ -24,13 +24,14 @@ import { canBotPost } from '../guildUtils.js';
 import { createLock } from '../locks.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import { adminRoleWarnings, ensureAdmin } from '../permissions.js';
-import { buildProfileEmbed, parseProfile, profileLogFields, type Profile } from '../profile.js';
+import { RECENT_LABEL, buildProfileEmbed, parseProfile, profileLogFields, type Profile } from '../profile.js';
 import {
   COMMENT_INPUT_ID,
   END_HOURS,
   contentRows,
   FIRST_NAME_INPUT_ID,
   LAST_NAME_INPUT_ID,
+  RECENT_INPUT_ID,
   START_HOURS,
   dataCenterRows,
   hourSelect,
@@ -38,6 +39,7 @@ import {
   nameAndCommentLabels,
   parseHour,
   progressRows,
+  recentLabel,
   toRow,
   vcNoticeButtons,
   worldRows,
@@ -90,6 +92,7 @@ interface WizardContext {
   autoApprove: boolean;
 }
 interface ModalInput extends NameAndCommentInput {
+  recent: string;
   /** 管理者の登録で選ばれたメンバー */
   targetId?: string;
 }
@@ -102,6 +105,7 @@ const withLock = createLock();
 // 入力内容がルールに合わなかったときの入力。「入力し直す」でモーダルに戻す
 const rejectedInputs = new Map<string, ModalInput>();
 const ADMIN_COMMENT_NOTE = '空欄なら、登録済みの人は今のひとことのまま';
+const ADMIN_RECENT_NOTE = '空欄なら、登録済みの人は今の内容のまま';
 
 export const data = new SlashCommandBuilder()
   .setName('profile-panel')
@@ -134,7 +138,7 @@ export const execute = async (interaction: ChatInputCommandInteraction<'cached'>
 export const buildPanel = (guild: Guild): PanelPayload => {
   const profileChannel = findProfileChannel(guild);
   const items = [
-    'キャラクター名・ひとこと',
+    `キャラクター名・ひとこと・${RECENT_LABEL}（任意）`,
     ...(findProgressRoles(guild).length > 0 ? ['進行度'] : []),
     'ワールド',
     '活動時間',
@@ -198,6 +202,7 @@ export const openAdminRegisterModal = async (interaction: ComponentInteraction):
         .setDescription('名前で検索して選べます（IDの入力は不要）')
         .setUserSelectMenuComponent(memberSelect),
       ...nameAndCommentLabels(input ?? { firstName: '', lastName: '', comment: '' }, ADMIN_COMMENT_NOTE),
+      recentLabel(input?.recent ?? '', ADMIN_RECENT_NOTE),
     );
   await interaction.showModal(modal);
 };
@@ -358,6 +363,7 @@ export const handleModalSubmit = async (interaction: ModalSubmitInteraction<'cac
     firstName: interaction.fields.getTextInputValue(FIRST_NAME_INPUT_ID),
     lastName: interaction.fields.getTextInputValue(LAST_NAME_INPUT_ID),
     comment: interaction.fields.getTextInputValue(COMMENT_INPUT_ID).trim(),
+    recent: interaction.fields.getTextInputValue(RECENT_INPUT_ID).trim(),
     targetId: target?.id,
   };
   // 文字数はモーダル側で制限できるが、使える文字と合計文字数はここで確認する
@@ -388,8 +394,9 @@ export const handleModalSubmit = async (interaction: ModalSubmitInteraction<'cac
   const profile: Profile = {
     ...(current ?? parseProfile(undefined)),
     name: characterName.name,
-    // 管理者の登録は今の内容が入っていない状態から入力するので、空欄なら今のひとことを残す
+    // 管理者の登録は今の内容が入っていない状態から入力するので、空欄なら今のひとこと・最近やっていることを残す
     comment: input.comment || (byAdmin ? (current?.comment ?? '') : ''),
+    recent: input.recent || (byAdmin ? (current?.recent ?? '') : ''),
   };
   const ctx: WizardContext = { target, byAdmin, autoApprove: !byAdmin && (await loadAutoApprove(interaction.guild.id)) };
   drafts.set(draftKey(interaction.user.id, target.id), profile);
@@ -460,12 +467,13 @@ const openModal = async (interaction: ComponentInteraction): Promise<void> => {
     firstName: currentFirstName,
     lastName: currentLastName,
     comment: current?.comment ?? '',
+    recent: current?.recent ?? '',
   };
 
   const modal = new ModalBuilder()
     .setCustomId(MODAL_ID)
     .setTitle(current ? 'プロフィールを編集' : 'プロフィールを作成')
-    .addLabelComponents(...nameAndCommentLabels(input));
+    .addLabelComponents(...nameAndCommentLabels(input), recentLabel(input.recent));
   await interaction.showModal(modal);
 };
 

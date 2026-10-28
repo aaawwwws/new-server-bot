@@ -50,6 +50,10 @@ export const initDatabase = async (): Promise<void> => {
       reviewed_at       timestamptz
     )
   `);
+  // 最近やっているゲーム・コンテンツ（自由入力・任意）
+  for (const table of ['profiles', 'profile_applications']) {
+    await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS recent text NOT NULL DEFAULT ''`);
+  }
   await pool.query(`
     CREATE INDEX IF NOT EXISTS profile_applications_pending
       ON profile_applications (guild_id, user_id) WHERE status = 'pending'

@@ -25,6 +25,7 @@ export interface ReviewMessageRef {
 interface ProfileColumns {
   character_name: string;
   comment: string;
+  recent: string;
   data_center: string | null;
   world: string | null;
   start_hour: number | null;
@@ -43,11 +44,12 @@ interface ApplicationRow extends ProfileColumns {
   user_id: string;
 }
 
-const PROFILE_COLUMNS = 'character_name, comment, data_center, world, start_hour, end_hour, jobs';
+const PROFILE_COLUMNS = 'character_name, comment, recent, data_center, world, start_hour, end_hour, jobs';
 
 const toProfile = (row: ProfileColumns): Profile => ({
   name: row.character_name,
   comment: row.comment,
+  recent: row.recent,
   dataCenter: row.data_center,
   world: row.world,
   startHour: row.start_hour,
@@ -124,13 +126,14 @@ export interface SaveProfileParams {
 export const saveProfile = async ({ guildId, userId, profile, progress, channelId, messageId }: SaveProfileParams) => {
   await pool.query(
     `INSERT INTO profiles (
-       guild_id, user_id, character_name, comment, progress, data_center, world,
+       guild_id, user_id, character_name, comment, recent, progress, data_center, world,
        start_hour, end_hour, jobs, channel_id, message_id
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      ON CONFLICT (guild_id, user_id) DO UPDATE SET
        character_name = EXCLUDED.character_name,
        comment        = EXCLUDED.comment,
+       recent         = EXCLUDED.recent,
        progress       = EXCLUDED.progress,
        data_center    = EXCLUDED.data_center,
        world          = EXCLUDED.world,
@@ -146,6 +149,7 @@ export const saveProfile = async ({ guildId, userId, profile, progress, channelI
       userId,
       profile.name,
       profile.comment,
+      profile.recent,
       progress,
       profile.dataCenter,
       profile.world,
@@ -179,13 +183,14 @@ export const createApplication = async (
     );
     const created = await client.query<{ id: string }>(
       `INSERT INTO profile_applications (guild_id, user_id, ${PROFILE_COLUMNS})
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING id`,
       [
         guildId,
         userId,
         profile.name,
         profile.comment,
+        profile.recent,
         profile.dataCenter,
         profile.world,
         profile.startHour,

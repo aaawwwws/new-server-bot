@@ -9,6 +9,8 @@ import { findProgressRoles } from './progressRoles.js';
 export interface Profile {
   name: string;
   comment: string;
+  /** 最近やっているゲーム・コンテンツ（自由入力・任意） */
+  recent: string;
   dataCenter: string | null;
   world: string | null;
   startHour: number | null;
@@ -22,6 +24,8 @@ const TIME_FIELD = '🕘 活動時間';
 const PROGRESS_FIELD = '📖 進行度';
 const JOB_FIELD = '⚔️ ジョブ';
 const CONTENT_FIELD = '🎮 よく遊ぶ';
+export const RECENT_LABEL = '最近やっていること';
+const RECENT_FIELD = `🕹️ ${RECENT_LABEL}`;
 const UNSET = '未設定';
 const JOB_SEPARATOR = '・';
 const COMMENT_QUOTE = '>>> ';
@@ -55,6 +59,8 @@ export const buildProfileEmbed = (member: GuildMember, profile: Profile): EmbedB
       { name: PROGRESS_FIELD, value: progress?.name ?? UNSET, inline: true },
       { name: JOB_FIELD, value: formatJobs(profile.jobs) || UNSET },
       { name: CONTENT_FIELD, value: memberContentNames(member).join(JOB_SEPARATOR) || UNSET },
+      // 任意なので、書いた人だけ出す
+      ...(profile.recent ? [{ name: RECENT_FIELD, value: profile.recent }] : []),
       // 「いつでも誘って下さい」ロールを付けている人だけ（ひとことの欄は申請内容の読み取りに使うので、別の欄にする）
       ...(hasInviteMe(member) ? [{ name: INVITE_ME_FIELD, value: 'いつでも誘ってください！' }] : []),
     )
@@ -85,6 +91,7 @@ export const profileLogFields = (profile: Profile): APIEmbedField[] => [
   { name: TIME_FIELD, value: describeTime(profile), inline: true },
   { name: JOB_FIELD, value: describeJobs(profile), inline: true },
   ...(profile.comment ? [{ name: '💬 ひとこと', value: profile.comment }] : []),
+  ...(profile.recent ? [{ name: RECENT_FIELD, value: profile.recent }] : []),
 ];
 
 /** プロフィール未登録の人がVCに入ったときのお知らせ */
@@ -118,6 +125,7 @@ export const parseProfile = (embed: Embed | undefined): Profile => {
   return {
     name: embed?.title ?? '',
     comment: embed?.description?.replace(COMMENT_QUOTE, '') ?? '',
+    recent: field(RECENT_LABEL),
     world: dataCenter?.worlds.find((world) => worldWords.includes(world)) ?? null,
     dataCenter: dataCenter?.name ?? null,
     startHour: time?.[1] ? Number(time[1]) : null,
