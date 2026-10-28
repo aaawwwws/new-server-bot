@@ -27,6 +27,11 @@ import {
   AUTO_APPROVE_OFF_ID,
   AUTO_APPROVE_ON_ID,
   DEFAULT_INACTIVE_DAYS,
+  IDLE_ROLE_BUTTON_ID,
+  IDLE_ROLE_DAYS_PREFIX,
+  IDLE_ROLE_OFF_ID,
+  IDLE_ROLE_ON_ID,
+  IDLE_ROLE_SYNC_ID,
   INACTIVE_DAYS,
   INACTIVE_PREFIX,
   KARTE_BUTTON_ID,
@@ -46,8 +51,11 @@ import {
   applyXpAdjustment,
   autoApproveScreen,
   buildMemberKarte,
+  changeInactiveRole,
+  inactiveRoleScreen,
   inactiveScreen,
   karteModal,
+  resyncInactiveRoles,
   saveXpChannels,
   sendWelcomeTest,
   setAutoApprove,
@@ -61,6 +69,7 @@ import {
 } from '../adminTools.js';
 import { loadWelcomeSettings } from '../guildSettings.js';
 import { fetchAllMembers } from '../guildUtils.js';
+import { INACTIVE_ROLE_NAME } from '../inactiveRole.js';
 import { addDays, formatShortDateTime, jstDay } from '../jst.js';
 import { nameById, nameWithUsername } from '../names.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
@@ -171,6 +180,7 @@ export const buildPanel = (): PanelPayload => {
         '__**⚙️ 設定**__',
         '**申請の自動許可**: プロフィールの申請を、管理者の確認なしですぐ許可するかどうか',
         '**入った人への案内**: 入った人にDMで送る案内（プロフ登録・設定・PT募集への行き方）。送る・送らないと、一言を変えられます',
+        `**非アクティブ**: しばらく発言・リアクション・VCがない人に「${INACTIVE_ROLE_NAME}」ロールを付けるか、何日で付けるか（7〜60日）`,
         '',
         '__**🔎 調べる**__',
         '**メンバーの詳細**: 1人の参加日・招待リンク・プロフィール・レベル・最後に来た日・設定・ロール・最近のログをまとめて見ます',
@@ -194,6 +204,7 @@ export const buildPanel = (): PanelPayload => {
   const settingsRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     panelButton(AUTO_APPROVE_BUTTON_ID, '申請の自動許可', '✅', ButtonStyle.Secondary),
     panelButton(WELCOME_BUTTON_ID, '入った人への案内', '👋', ButtonStyle.Secondary),
+    panelButton(IDLE_ROLE_BUTTON_ID, '非アクティブ', '🌙', ButtonStyle.Secondary),
   );
   const lookupRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     panelButton(KARTE_BUTTON_ID, 'メンバーの詳細', '🗂️', ButtonStyle.Secondary),
@@ -287,6 +298,28 @@ export const handleButton = async (interaction: ButtonInteraction<'cached'>): Pr
       await interaction.editReply(await autoApproveScreen(interaction.guild, note));
       return;
     }
+    case IDLE_ROLE_BUTTON_ID:
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      await interaction.editReply(await inactiveRoleScreen(interaction.guild));
+      return;
+    case IDLE_ROLE_ON_ID:
+    case IDLE_ROLE_OFF_ID:
+    case IDLE_ROLE_SYNC_ID: {
+      // 付け直しで何人も付け外しすることがあるので、先に応答しておく
+      await interaction.deferUpdate();
+      const note =
+        interaction.customId === IDLE_ROLE_SYNC_ID
+          ? await resyncInactiveRoles(interaction.member)
+          : await changeInactiveRole(interaction.member, { enabled: interaction.customId === IDLE_ROLE_ON_ID });
+      await interaction.editReply(await inactiveRoleScreen(interaction.guild, note));
+      return;
+    }
+  }
+  if (interaction.customId.startsWith(IDLE_ROLE_DAYS_PREFIX)) {
+    await interaction.deferUpdate();
+    const note = await changeInactiveRole(interaction.member, { days: Number(interaction.customId.slice(IDLE_ROLE_DAYS_PREFIX.length)) });
+    await interaction.editReply(await inactiveRoleScreen(interaction.guild, note));
+    return;
   }
   if (interaction.customId.startsWith(BOOST_STOP_PREFIX)) {
     await stopBoostFromButton(interaction, interaction.customId.slice(BOOST_STOP_PREFIX.length));

@@ -48,6 +48,14 @@ import { handleMessageXp, handleReactionXp, startVoiceXp } from './levels.js';
 import { deleteOldReactions } from './levelStore.js';
 import { deleteOldLogs } from './logStore.js';
 import { handleMemberLeave } from './memberLifecycle.js';
+import {
+  INACTIVE_ROLE_NAME,
+  ensureInactiveRole,
+  noteMessageActivity,
+  noteReactionActivity,
+  noteVoiceActivity,
+  startInactiveRoles,
+} from './inactiveRole.js';
 import { handleAuditLogEntry } from './moderationLog.js';
 import { refreshPanels } from './panelRefresh.js';
 import { startRankingBoards } from './rankingBoard.js';
@@ -155,6 +163,8 @@ client.once(Events.ClientReady, async (readyClient) => {
   startLogRetention();
   // 毎週月曜9時に先週の管理レポートを「ログ」チャンネルに出し、DBのバックアップが作られ続けているかを見張る
   startAdminReports(readyClient);
+  // しばらく来ていない人に「非アクティブ」を付ける（起動時と、そのあと日が変わるたび。また来たら、すぐ外す）
+  startInactiveRoles(readyClient);
 });
 
 const LOG_RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -196,6 +206,10 @@ const prepareGuild = async (guild: Guild): Promise<void> => {
     reportError(`「${guild.name}」に「${INVITE_ME_ROLE_NAME}」ロールを作れませんでした`, error, guild);
     return null;
   });
+  const inactiveRole = await ensureInactiveRole(guild).catch((error: unknown) => {
+    reportError(`「${guild.name}」に「${INACTIVE_ROLE_NAME}」ロールを作れませんでした`, error, guild);
+    return null;
+  });
 
   // 作ったことは、用意できたログチャンネルに残す
   if (logChannel) {
@@ -209,6 +223,13 @@ const prepareGuild = async (guild: Guild): Promise<void> => {
   }
   if (vcRole) {
     await sendLog(guild, 'system', `「${VC_ROLE_NAME}」ロールがなかったので作成しました。VC通知を受け取る人に、設定パネルや登録の手順で付きます`);
+  }
+  if (inactiveRole) {
+    await sendLog(
+      guild,
+      'system',
+      `「${INACTIVE_ROLE_NAME}」ロールがなかったので作成しました。しばらく発言・リアクション・VCがない人に付きます（日数とオン・オフは管理パネルの「非アクティブ」で変えられます）`,
+    );
   }
 
   // 参加した人が使った招待リンクを調べられるよう、今の招待リンクの使用回数を覚える
@@ -301,6 +322,9 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   voiceStatus.handleVoiceStatusPrompt(oldState, newState).catch((error: unknown) => {
     reportError('VCステータスのお知らせに失敗しました', error);
   });
+  noteVoiceActivity(oldState, newState).catch((error: unknown) => {
+    reportError('VCに入った日を残せませんでした', error);
+  });
 });
 
 // VCステータスがDiscord側で変わったとき（VCの画面から変えた、誰もいなくなって消えた など）
@@ -312,6 +336,9 @@ client.ws.on(GatewayDispatchEvents.VoiceChannelStatusUpdate, (data: GatewayVoice
 client.ws.on(GatewayDispatchEvents.MessageReactionAdd, (data: GatewayMessageReactionAddDispatchData) => {
   handleReactionXp(client, data).catch((error: unknown) => {
     reportError('リアクションのXPを保存できませんでした', error);
+  });
+  noteReactionActivity(client, data).catch((error: unknown) => {
+    reportError('リアクションした日を残せませんでした', error);
   });
 });
 
@@ -378,6 +405,10 @@ client.on(Events.MessageCreate, (message) => {
   // あとで消された・編集されたときに内容が分かるよう、発言を記録する
   recordMessage(message).catch((error: unknown) => {
     reportError('発言を記録できませんでした', error);
+  });
+  // 来た日を残し、「非アクティブ」が付いていれば外す
+  noteMessageActivity(message).catch((error: unknown) => {
+    reportError('発言した日を残せませんでした', error);
   });
 });
 

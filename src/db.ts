@@ -171,6 +171,18 @@ export const initDatabase = async (): Promise<void> => {
   await pool.query("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS welcome_message text NOT NULL DEFAULT ''");
   // プロフィールの申請を、管理者の確認なしで自動で許可するか（最初はしない）
   await pool.query('ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS auto_approve boolean NOT NULL DEFAULT false');
+  // 決めた日数来ていない人に「非アクティブ」ロールを付けるか（最初は付ける・14日）
+  await pool.query('ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS inactive_role_enabled boolean NOT NULL DEFAULT true');
+  await pool.query('ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS inactive_role_days smallint NOT NULL DEFAULT 14');
+  // 最後に来た日（発言・リアクション・VCに入った）。XPにならないもの（XPなしチャンネル・1人のVCなど）も含む。非アクティブの判定に使う
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS member_last_active (
+      guild_id text NOT NULL,
+      user_id  text NOT NULL,
+      day      date NOT NULL,
+      PRIMARY KEY (guild_id, user_id)
+    )
+  `);
   // Botがメンバーごとに作った専用の招待リンク（Botが作るとリンクの作成者がBotになるので、誰のリンクかをここで覚える）。
   // retired_at は作り直したときに付ける（前のリンクで入った人も、持ち主に数える）
   await pool.query(`

@@ -218,11 +218,25 @@ export const findBestWeekXp = async (guildId: string, userId: string): Promise<{
 
 /** 人ごとの、最後に来た日（「来た日」の条件で見る） */
 export const listLastActiveDays = async (guildId: string): Promise<Map<string, string>> => {
+  // XPの記録と、XPにならないものも含めた「来た日」の記録の、新しい方
   const { rows } = await pool.query<{ user_id: string; day: string }>(
-    `SELECT user_id, max(day)::text AS day FROM level_daily_xp WHERE guild_id = $1 AND ${ACTIVE_DAY} GROUP BY user_id`,
+    `SELECT user_id, max(day)::text AS day FROM (
+       SELECT user_id, day FROM level_daily_xp WHERE guild_id = $1 AND ${ACTIVE_DAY}
+       UNION ALL
+       SELECT user_id, day FROM member_last_active WHERE guild_id = $1
+     ) AS days GROUP BY user_id`,
     [guildId],
   );
   return new Map(rows.map((row) => [row.user_id, row.day]));
+};
+
+/** 来た日（発言・リアクション・VCに入った）を残す。XPにならないもの（XPなしチャンネル・1人のVCなど）も含む */
+export const touchLastActive = async (guildId: string, userId: string, day: string): Promise<void> => {
+  await pool.query(
+    `INSERT INTO member_last_active (guild_id, user_id, day) VALUES ($1, $2, $3::date)
+     ON CONFLICT (guild_id, user_id) DO UPDATE SET day = GREATEST(member_last_active.day, EXCLUDED.day)`,
+    [guildId, userId, day],
+  );
 };
 
 /** from の日から to の日の前日までに、人ごとに何日来たか */

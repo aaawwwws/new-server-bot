@@ -20,12 +20,16 @@ import { formatDuration } from './duration.js';
 import { fetchAllMembers } from './guildUtils.js';
 import {
   loadAutoApprove,
+  loadInactiveRoleSettings,
   loadWelcomeSettings,
   loadXpExcludedChannels,
   saveAutoApprove,
+  saveInactiveRoleSettings,
   saveWelcomeSettings,
   saveXpExcludedChannels,
+  type InactiveRoleSettings,
 } from './guildSettings.js';
+import { INACTIVE_ROLE_DAYS, INACTIVE_ROLE_NAME, describeSync, findInactiveRole, syncInactiveRoles } from './inactiveRole.js';
 import { addDays, dayStart, formatDay, jstDay } from './jst.js';
 import { formatNumber, levelFromXp } from './levels.js';
 import { adjustXp, findFirstRecordedDay, findLevelStats, findStreak, listLastActiveDays } from './levelStore.js';
@@ -487,6 +491,88 @@ export const setAutoApprove = async (admin: GuildMember, on: boolean): Promise<s
   await saveAutoApprove(admin.guild.id, on);
   void sendLog(admin.guild, 'autoApprove', `${admin} が申請を${on ? '自動で許可するようにしました' : '管理者が確認するように戻しました'}`, admin);
   return on ? '✅ 申請を自動で許可するようにしました。' : '✅ 申請を管理者が確認するように戻しました。';
+};
+
+// ---- 「非アクティブ」ロール
+// customId は「来ていない人」（admin:inactive…）と見分けがつくよう、idle を使う
+
+export const IDLE_ROLE_BUTTON_ID = `${PREFIX}idle-role`;
+export const IDLE_ROLE_ON_ID = `${PREFIX}idle-role-on`;
+export const IDLE_ROLE_OFF_ID = `${PREFIX}idle-role-off`;
+/** 日数のボタン（後ろに日数） */
+export const IDLE_ROLE_DAYS_PREFIX = `${PREFIX}idle-role-days:`;
+export const IDLE_ROLE_SYNC_ID = `${PREFIX}idle-role-sync`;
+
+/** 「非アクティブ」の設定の画面（今の設定を青く出す）。note は操作の結果 */
+export const inactiveRoleScreen = async (guild: Guild, note?: string) => {
+  const [settings] = await Promise.all([loadInactiveRoleSettings(guild.id), fetchAllMembers(guild)]);
+  const role = findInactiveRole(guild);
+  const toggle = (on: boolean): ButtonBuilder =>
+    new ButtonBuilder()
+      .setCustomId(on ? IDLE_ROLE_ON_ID : IDLE_ROLE_OFF_ID)
+      .setLabel(on ? '付ける' : '付けない')
+      .setStyle(settings.enabled === on ? ButtonStyle.Primary : ButtonStyle.Secondary);
+  const dayButtons = INACTIVE_ROLE_DAYS.map((days) =>
+    new ButtonBuilder()
+      .setCustomId(`${IDLE_ROLE_DAYS_PREFIX}${days}`)
+      .setLabel(`${days}日`)
+      .setStyle(settings.days === days ? ButtonStyle.Primary : ButtonStyle.Secondary),
+  );
+  const problem = !role
+    ? settings.enabled
+      ? `⚠「${INACTIVE_ROLE_NAME}」ロールがありません。「今すぐ付け直す」を押すと作ります。`
+      : null
+    : !role.editable
+      ? `⚠ Botのロールが「${INACTIVE_ROLE_NAME}」より下にあるため、付け外しできません。サーバー設定 > ロール で、Botのロールを上にドラッグしてください。`
+      : null;
+  return {
+    content: [
+      ...(note ? [note, ''] : []),
+      `🌙 **非アクティブ**（今は **${settings.enabled ? `付ける・${settings.days}日` : '付けない'}**。青いボタンが今の設定です）`,
+      '',
+      `**${settings.days}日以上**、発言・リアクション・VCに入ることがなかった人に「${INACTIVE_ROLE_NAME}」ロールを付けます。また来たら、すぐ外します。`,
+      '・付け直すのは毎日0時すぎと、ここで設定を変えたとき。Botと、入って日数がたっていない人には付けません',
+      '・XPなしチャンネルでの発言や、1人で入ったVCも「来た」に数えます',
+      '・ロールの色・メンバー一覧で分けて表示するか・見えるチャンネルは、Discordのサーバー設定 > ロール で変えられます',
+      '',
+      `今付いている人: **${role ? role.members.size : 0}人**（一覧は「来ていない人」で見られます）`,
+      ...(problem ? ['', problem] : []),
+    ].join('\n'),
+    components: [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(toggle(true), toggle(false)),
+      new ActionRowBuilder<ButtonBuilder>().addComponents(dayButtons),
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(IDLE_ROLE_SYNC_ID).setLabel('今すぐ付け直す').setEmoji({ name: '🔄' }).setStyle(ButtonStyle.Secondary),
+      ),
+    ],
+  };
+};
+
+/** 設定を変えて（ログに残し）、すぐ付け直す。結果の一言を返す */
+export const changeInactiveRole = async (admin: GuildMember, change: Partial<InactiveRoleSettings>): Promise<string> => {
+  const before = await loadInactiveRoleSettings(admin.guild.id);
+  const days = change.days ?? before.days;
+  if (!INACTIVE_ROLE_DAYS.includes(days)) return '⚠ その日数は選べません。';
+  const after = { enabled: change.enabled ?? before.enabled, days };
+  if (after.enabled === before.enabled && after.days === before.days) return '変更はありませんでした。';
+
+  await saveInactiveRoleSettings(admin.guild.id, after);
+  const summary = after.enabled ? `${after.days}日来ていない人に付ける` : '付けない';
+  void sendLog(admin.guild, 'inactive', `${admin} が「${INACTIVE_ROLE_NAME}」の設定を「${summary}」にしました`, admin, {
+    title: '非アクティブの設定',
+    fields: [
+      { name: '変更前', value: before.enabled ? `付ける・${before.days}日` : '付けない', inline: true },
+      { name: '変更後', value: after.enabled ? `付ける・${after.days}日` : '付けない', inline: true },
+    ],
+  });
+  const result = await syncInactiveRoles(admin.guild, admin);
+  return [`✅ 「${summary}」にしました。${describeSync(result)}。`, ...(result.problem ? [`⚠ ${result.problem}`] : [])].join('\n');
+};
+
+/** 「今すぐ付け直す」 */
+export const resyncInactiveRoles = async (admin: GuildMember): Promise<string> => {
+  const result = await syncInactiveRoles(admin.guild, admin);
+  return result.problem ? `⚠ ${result.problem}` : `🔄 付け直しました。${describeSync(result)}。`;
 };
 
 // ---- 小物

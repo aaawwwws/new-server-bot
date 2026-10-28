@@ -65,6 +65,32 @@ export const saveAutoApprove = async (guildId: string, on: boolean): Promise<voi
   );
 };
 
+// ---- 「非アクティブ」ロール（1日1回の付け直しと、管理パネルで読む）
+
+export interface InactiveRoleSettings {
+  enabled: boolean;
+  /** この日数、発言・リアクション・VCがなければ付ける */
+  days: number;
+}
+
+export const loadInactiveRoleSettings = async (guildId: string): Promise<InactiveRoleSettings> => {
+  const { rows } = await pool.query<{ inactive_role_enabled: boolean; inactive_role_days: number }>(
+    'SELECT inactive_role_enabled, inactive_role_days FROM guild_settings WHERE guild_id = $1',
+    [guildId],
+  );
+  const [row] = rows;
+  return row ? { enabled: row.inactive_role_enabled, days: row.inactive_role_days } : { enabled: true, days: 14 };
+};
+
+export const saveInactiveRoleSettings = async (guildId: string, settings: InactiveRoleSettings): Promise<void> => {
+  await pool.query(
+    `INSERT INTO guild_settings (guild_id, inactive_role_enabled, inactive_role_days) VALUES ($1, $2, $3)
+     ON CONFLICT (guild_id) DO UPDATE SET inactive_role_enabled = EXCLUDED.inactive_role_enabled,
+       inactive_role_days = EXCLUDED.inactive_role_days, updated_at = now()`,
+    [guildId, settings.enabled, settings.days],
+  );
+};
+
 /** 起動時に、全サーバーの設定を読み込む */
 export const loadAllGuildSettings = async (client: Client<true>): Promise<void> => {
   for (const guild of client.guilds.cache.values()) {
