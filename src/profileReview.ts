@@ -95,6 +95,9 @@ export const submitApplication = async (member: GuildMember, profile: Profile): 
   return true;
 };
 
+/** 登録できた人への一言（気が合いそうな人を探せることを知らせる） */
+export const FRIENDS_HINT = '設定パネルの「🤝 フレンド候補」で、ワールドや遊ぶ時間が近い、気が合いそうな人を探せます。';
+
 export type AutoApproveResult = { ok: true; result: PublishResult } | { ok: false; reason: string };
 
 /**
@@ -216,6 +219,7 @@ const approve = async (interaction: ButtonInteraction<'cached'>, id: string): Pr
         `✅ 「${interaction.guild.name}」でのプロフィールの申請が許可されました！`,
         result.message.url,
         ...(result.memberRole === 'added' ? [`「${MEMBER_ROLE_NAME}」ロールが付きました。`] : []),
+        FRIENDS_HINT,
       ].join('\n'),
     );
 

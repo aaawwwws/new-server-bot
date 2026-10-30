@@ -32,6 +32,7 @@ import {
 import { INACTIVE_ROLE_DAYS, INACTIVE_ROLE_NAME, describeSync, findInactiveRole, syncInactiveRoles } from './inactiveRole.js';
 import { addDays, dayStart, formatDay, jstDay } from './jst.js';
 import { formatNumber, levelFromXp } from './levels.js';
+import { updateTitles } from './levelTitles.js';
 import { adjustXp, findFirstRecordedDay, findLevelStats, findStreak, listLastActiveDays } from './levelStore.js';
 import { findJoinInvite, listRecentLogsFor } from './logStore.js';
 import { loadJoinAnnounce, loadRankingHidden } from './memberSettings.js';
@@ -288,6 +289,10 @@ export const applyXpAdjustment = async (admin: GuildMember, { target, amount, re
   if (delta === null) return `XPは「500」「+500」「-500」のように、0以外の数で入力してください（${formatNumber(MAX_ADJUST)}まで）。`;
 
   const { before, after } = await adjustXp(admin.guild.id, target.id, delta);
+  // レベルが変わったら称号も付け替える（失敗しても調整は終わっているので、止めない）
+  await updateTitles(admin.guild, [target.id], admin).catch((error: unknown) => {
+    console.error('称号を付け替えられませんでした:', error);
+  });
   const change = delta > 0 ? `${formatNumber(delta)} 足しました` : `${formatNumber(-delta)} 引きました`;
   const levels = `Lv.${levelFromXp(before).level} → Lv.${levelFromXp(after).level}`;
   void sendLog(admin.guild, 'level', `${admin} が ${target} のXPを${change}`, admin, {

@@ -72,6 +72,8 @@ export const initDatabase = async (): Promise<void> => {
   `);
   // ランキングに名前を出さない設定（XPは貯まるが、順位には入らない）
   await pool.query('ALTER TABLE member_settings ADD COLUMN IF NOT EXISTS hide_from_ranking boolean NOT NULL DEFAULT false');
+  // フレンド候補に自分を出さない（出さない人も、ほかの人の候補は見られる）
+  await pool.query('ALTER TABLE member_settings ADD COLUMN IF NOT EXISTS hide_from_friends boolean NOT NULL DEFAULT false');
 
   // レベル（経験値）。xp は発言とVCで貯まった合計。message_count は発言の数、voice_minutes はXPになったVCの時間（分）
   await pool.query(`

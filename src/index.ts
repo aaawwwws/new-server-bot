@@ -46,6 +46,7 @@ import { backfillMemberInvites, recordMemberInvite, resolveInviteOwner } from '.
 import { findUsedInvite, handleInviteCreate, handleInviteDelete, loadInvites } from './inviteTracker.js';
 import { handleMessageXp, handleReactionXp, startVoiceXp } from './levels.js';
 import { deleteOldReactions } from './levelStore.js';
+import { LEVEL_TITLES, ensureTitleRoles, syncTitles } from './levelTitles.js';
 import { deleteOldLogs } from './logStore.js';
 import { handleMemberLeave } from './memberLifecycle.js';
 import {
@@ -210,6 +211,10 @@ const prepareGuild = async (guild: Guild): Promise<void> => {
     reportError(`「${guild.name}」に「${INACTIVE_ROLE_NAME}」ロールを作れませんでした`, error, guild);
     return null;
   });
+  const titleRoles = await ensureTitleRoles(guild).catch((error: unknown): string[] => {
+    reportError(`「${guild.name}」に称号のロールを作れませんでした`, error, guild);
+    return [];
+  });
 
   // 作ったことは、用意できたログチャンネルに残す
   if (logChannel) {
@@ -231,6 +236,14 @@ const prepareGuild = async (guild: Guild): Promise<void> => {
       `「${INACTIVE_ROLE_NAME}」ロールがなかったので作成しました。しばらく発言・リアクション・VCがない人に付きます（日数とオン・オフは管理パネルの「非アクティブ」で変えられます）`,
     );
   }
+  if (titleRoles.length > 0) {
+    const levels = LEVEL_TITLES.filter((title) => titleRoles.includes(title.name)).map((title) => `Lv.${title.level}「${title.name}」`);
+    await sendLog(guild, 'system', `称号のロールがなかったので作成しました（${levels.join('・')}）。レベルが上がると自動で付きます`);
+  }
+  // 称号を今のレベルに合わせる（Botが止まっていた間の分と、ロールを作ったときの分）
+  await syncTitles(guild).catch((error: unknown) => {
+    reportError(`「${guild.name}」の称号を付け直せませんでした`, error, guild);
+  });
 
   // 参加した人が使った招待リンクを調べられるよう、今の招待リンクの使用回数を覚える
   await loadInvites(guild).catch((error: unknown) => {

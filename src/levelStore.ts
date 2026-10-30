@@ -142,6 +142,15 @@ export const listLevelStats = async (guildId: string): Promise<LevelStats[]> => 
   return rows.map(toStats);
 };
 
+/** 何人かの累計XP（記録がない人は入らない） */
+export const listXpOf = async (guildId: string, userIds: string[]): Promise<Map<string, number>> => {
+  const { rows } = await pool.query<{ user_id: string; xp: string }>(
+    'SELECT user_id, xp FROM member_levels WHERE guild_id = $1 AND user_id = ANY($2::text[])',
+    [guildId, userIds],
+  );
+  return new Map(rows.map((row) => [row.user_id, Number(row.xp)]));
+};
+
 /** 1人分の合計（まだ記録がなければ全部 0） */
 export const findLevelStats = async (guildId: string, userId: string): Promise<LevelStats> => {
   const { rows } = await pool.query<LevelRow>(

@@ -57,7 +57,7 @@ import {
   publishProfile,
   type MemberRoleResult,
 } from '../profilePublish.js';
-import { autoApproveApplication, submitApplication } from '../profileReview.js';
+import { FRIENDS_HINT, autoApproveApplication, submitApplication } from '../profileReview.js';
 import { findContentRoles, toggleContentRole } from '../contentRoles.js';
 import { findProgressRoles, setProgressRole } from '../progressRoles.js';
 import { loadAutoApprove } from '../guildSettings.js';
@@ -509,6 +509,7 @@ const registerAutomatically = async (interaction: ComponentInteraction, member: 
     content: [
       `✅ 登録しました！「${PROFILE_CHANNEL_NAME}」チャンネルに投稿しました: ${outcome.result.message.url}`,
       ...(roleNote ? [roleNote] : []),
+      FRIENDS_HINT,
     ].join('\n'),
     embeds: [buildProfileEmbed(member, profile)],
     components: [],

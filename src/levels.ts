@@ -5,6 +5,7 @@ import { fetchAllMembers } from './guildUtils.js';
 import { isXpExcluded } from './guildSettings.js';
 import { jstDay } from './jst.js';
 import { addMessageActivity, addReactionActivity, addVoiceMinute, recordReaction } from './levelStore.js';
+import { updateTitles } from './levelTitles.js';
 import { applyBoost, boostPercent } from './xpBoost.js';
 
 // 経験値（XP）の貯まり方。数字を変えれば、貯まる速さを調整できる（XPアップ期間中は、ここに倍率がかかる）
@@ -25,26 +26,8 @@ export const REACTION_RECEIVE_XP = 5;
 export const REACTION_RECEIVE_DAILY_LIMIT = 20;
 const VOICE_TICK_MS = 60_000;
 
-/** そのレベルから次のレベルに上がるのに要るXP。レベルが上がるほど多く要る */
-export const xpForNextLevel = (level: number): number => 5 * level ** 2 + 50 * level + 100;
-
-export interface LevelProgress {
-  level: number;
-  /** 今のレベルになってから貯めたXP */
-  current: number;
-  /** 次のレベルに上がるのに要るXP（current を含めた全体） */
-  needed: number;
-}
-
-export const levelFromXp = (xp: number): LevelProgress => {
-  let level = 0;
-  let rest = xp;
-  while (rest >= xpForNextLevel(level)) {
-    rest -= xpForNextLevel(level);
-    level++;
-  }
-  return { level, current: rest, needed: xpForNextLevel(level) };
-};
+// レベルの計算は levelMath.ts（称号からも使うため）。ここからも読み込めるようにしておく
+export { levelFromXp, xpForNextLevel, type LevelProgress } from './levelMath.js';
 
 /** 「1,234」のような区切り付きの数字 */
 export const formatNumber = (value: number): string => value.toLocaleString('ja-JP');
@@ -64,7 +47,14 @@ export const handleMessageXp = async (message: Message): Promise<void> => {
   if (earns) lastMessageXpAt.set(key, now);
   const xp = earns ? applyBoost(randomInt(MESSAGE_XP_MIN, MESSAGE_XP_MAX + 1), boostPercent(message.guildId)) : 0;
   await addMessageActivity(message.guildId, message.author.id, xp, jstDay());
+  if (xp > 0) await refreshTitles(message.guild, [message.author.id]);
 };
+
+/** XPが増えた人の称号を付け替える。失敗しても、XPの保存は失敗にしない */
+const refreshTitles = (guild: Guild, userIds: string[]): Promise<void> =>
+  updateTitles(guild, userIds).catch((error: unknown) => {
+    reportError(`「${guild.name}」の称号を付け替えられませんでした`, error, guild);
+  });
 
 /**
  * リアクションでXPを貯める。付けた人と、付けられたメッセージを書いた人の両方に入る（それぞれ1日の上限まで）。
@@ -83,8 +73,9 @@ export const handleReactionXp = async (client: Client, data: GatewayMessageReact
 
   const percent = boostPercent(guildId);
   const day = jstDay();
-  await addReactionActivity(guildId, userId, 'given', applyBoost(REACTION_GIVE_XP, percent), REACTION_GIVE_DAILY_LIMIT, day);
-  await addReactionActivity(guildId, authorId, 'received', applyBoost(REACTION_RECEIVE_XP, percent), REACTION_RECEIVE_DAILY_LIMIT, day);
+  const given = await addReactionActivity(guildId, userId, 'given', applyBoost(REACTION_GIVE_XP, percent), REACTION_GIVE_DAILY_LIMIT, day);
+  const received = await addReactionActivity(guildId, authorId, 'received', applyBoost(REACTION_RECEIVE_XP, percent), REACTION_RECEIVE_DAILY_LIMIT, day);
+  await refreshTitles(guild, [...(given > 0 ? [userId] : []), ...(received > 0 ? [authorId] : [])]);
 };
 
 /**
@@ -123,4 +114,5 @@ export const giveVoiceXp = async (guild: Guild): Promise<void> => {
   const day = jstDay();
   await addVoiceMinute(guild.id, others, applyBoost(VOICE_XP_PER_MINUTE, percent), day);
   await addVoiceMinute(guild.id, streaming, applyBoost(VOICE_XP_PER_MINUTE + STREAM_BONUS_PER_MINUTE, percent), day);
+  await refreshTitles(guild, earners);
 };

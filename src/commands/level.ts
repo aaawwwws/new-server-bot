@@ -11,6 +11,7 @@ import { formatDuration } from '../duration.js';
 import { jstDay } from '../jst.js';
 import { MESSAGE_XP_COOLDOWN_MS, formatNumber, levelFromXp } from '../levels.js';
 import { findLevelStats, findStreak } from '../levelStore.js';
+import { describeTitle } from '../levelTitles.js';
 import { loadRankingHidden } from '../memberSettings.js';
 import { renderRankCard } from '../rankCard.js';
 import { computeRanking, isRankingExempt } from '../rankings.js';
@@ -125,6 +126,7 @@ export const buildLevelView = async (member: GuildMember, now: Date = new Date()
         value: `した ${formatNumber(stats.reactionsGiven)}回・もらった ${formatNumber(stats.reactionsReceived)}回`,
         inline: true,
       },
+      { name: '🎖️ 称号', value: describeTitle(level) },
     )
     .setFooter({
       text: `XPは発言（${MESSAGE_XP_COOLDOWN_MS / 60_000}分に1回）、2人以上いるVC（ミュート中は除く）、リアクション（した・もらった）で貯まります`,

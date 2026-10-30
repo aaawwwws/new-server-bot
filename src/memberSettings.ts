@@ -63,6 +63,33 @@ export const listRankingHiddenIds = async (guildId: string): Promise<Set<string>
   return new Set(rows.map((row) => row.user_id));
 };
 
+// フレンド候補に自分を出すか（出さない人も、ほかの人の候補は見られる）
+
+export const loadFriendsHidden = async (guildId: string, userId: string): Promise<boolean> => {
+  const { rows } = await pool.query<{ hide_from_friends: boolean }>(
+    'SELECT hide_from_friends FROM member_settings WHERE guild_id = $1 AND user_id = $2',
+    [guildId, userId],
+  );
+  return rows[0]?.hide_from_friends ?? false;
+};
+
+export const saveFriendsHidden = async (guildId: string, userId: string, hidden: boolean): Promise<void> => {
+  await pool.query(
+    `INSERT INTO member_settings (guild_id, user_id, hide_from_friends) VALUES ($1, $2, $3)
+     ON CONFLICT (guild_id, user_id) DO UPDATE SET hide_from_friends = EXCLUDED.hide_from_friends, updated_at = now()`,
+    [guildId, userId, hidden],
+  );
+};
+
+/** フレンド候補に出ない設定の人 */
+export const listFriendsHiddenIds = async (guildId: string): Promise<Set<string>> => {
+  const { rows } = await pool.query<{ user_id: string }>(
+    'SELECT user_id FROM member_settings WHERE guild_id = $1 AND hide_from_friends',
+    [guildId],
+  );
+  return new Set(rows.map((row) => row.user_id));
+};
+
 export const saveJoinAnnounce = async (guildId: string, userId: string, key: JoinAnnounceKey, value: boolean): Promise<void> => {
   // 列名は上の決まった値だけなので、そのまま埋め込んでよい
   const column = COLUMNS[key];

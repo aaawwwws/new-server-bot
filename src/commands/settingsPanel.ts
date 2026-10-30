@@ -26,7 +26,17 @@ import { findContentRoles, toggleContentRole } from '../contentRoles.js';
 import { DATA_CENTERS, type DataCenter } from '../dataCenters.js';
 import { ensurePersonalInvite } from '../inviteLinks.js';
 import { INVITE_ME_ROLE_NAME, findInviteMeRole, setInviteMe } from '../inviteMeRole.js';
-import { loadJoinAnnounce, loadRankingHidden, saveJoinAnnounce, type JoinAnnounceKey, type JoinAnnounceSettings } from '../memberSettings.js';
+import { findFriendCandidates } from '../friendSuggestions.js';
+import {
+  loadFriendsHidden,
+  loadJoinAnnounce,
+  loadRankingHidden,
+  saveFriendsHidden,
+  saveJoinAnnounce,
+  type JoinAnnounceKey,
+  type JoinAnnounceSettings,
+} from '../memberSettings.js';
+import { boldName } from '../names.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import { RECENT_LABEL, buildProfileEmbed, describeJobs, describeTime, describeWorld, type Profile } from '../profile.js';
 import {
@@ -88,6 +98,11 @@ const VC_MENU_ID = `${CUSTOM_ID_PREFIX}menu:vc`;
 const LEVEL_MENU_ID = `${CUSTOM_ID_PREFIX}menu:level`;
 const INVITE_MENU_ID = `${CUSTOM_ID_PREFIX}menu:invite`;
 const INVITE_ME_MENU_ID = `${CUSTOM_ID_PREFIX}menu:inviteme`;
+const FRIENDS_MENU_ID = `${CUSTOM_ID_PREFIX}menu:friends`;
+/** フレンド候補を1ページに出す人数 */
+const FRIENDS_PER_PAGE = 5;
+/** フレンド候補に出す「最近やっていること」の長さ */
+const MAX_RECENT_IN_FRIENDS = 60;
 const LEVEL_USER_SELECT_ID = `${CUSTOM_ID_PREFIX}level-user`;
 interface JoinAnnounceItem {
   key: JoinAnnounceKey;
@@ -175,13 +190,16 @@ export const buildPanel = (): PanelPayload => {
         '',
         '**📊 レベル**',
         '自分やほかの人のレベル、サーバーのランキング（今日・今週・今月・累計）、自分の順位と歴代記録を見られます。',
-        'ランキングに名前を出さない設定もここでできます。',
+        'ランキングに名前を出さない設定もここでできます。レベルが上がると、称号のロール（Lv.5〜50）が付きます。',
         '',
         '**📨 招待**',
         'あなた専用の招待リンクを作れます。リンクで入った人がプロフィール登録まで進むと、招待ランキングに数えられます。',
         '',
         '**🙌 いつでも誘って**',
         `「${INVITE_ME_ROLE_NAME}」ロールを自分で付け外しできます。付けるとプロフィールに出て、PT募集でこのロールに声をかけてもらえます。`,
+        '',
+        '**🤝 フレンド候補**',
+        'ワールド・遊ぶ時間・よく遊ぶコンテンツが近い、気が合いそうな人を紹介します（プロフィールを登録した人だけ）。',
       ].join('\n'),
     )
     .setColor(0x5865f2);
@@ -192,7 +210,11 @@ export const buildPanel = (): PanelPayload => {
     new ButtonBuilder().setCustomId(INVITE_MENU_ID).setLabel('招待').setEmoji({ name: '📨' }).setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(INVITE_ME_MENU_ID).setLabel('いつでも誘って').setEmoji({ name: '🙌' }).setStyle(ButtonStyle.Primary),
   );
-  return { embeds: [embed], components: [row] };
+  // 1行に5つまでなので、2行目に置く
+  const secondRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(FRIENDS_MENU_ID).setLabel('フレンド候補').setEmoji({ name: '🤝' }).setStyle(ButtonStyle.Primary),
+  );
+  return { embeds: [embed], components: [row, secondRow] };
 };
 
 export const handleComponent = async (interaction: ComponentInteraction): Promise<void> => {
@@ -211,6 +233,9 @@ export const handleComponent = async (interaction: ComponentInteraction): Promis
         return;
       case 'inviteme':
         await show(interaction, inviteMeScreen(interaction.member));
+        return;
+      case 'friends':
+        await showAfterDefer(interaction, () => friendsScreen(interaction.member, 0));
         return;
       default:
         await openProfileMenu(interaction);
@@ -262,6 +287,17 @@ export const handleComponent = async (interaction: ComponentInteraction): Promis
     case 'invite-renew':
       await interaction.editReply(withFiles(await inviteScreen(interaction.member, { renew: true })));
       return;
+    case 'friends':
+      await interaction.editReply(withFiles(await friendsScreen(interaction.member, Number(value) || 0)));
+      return;
+    case 'friends-hide': {
+      const hidden = value === 'on';
+      await saveFriendsHidden(interaction.guild.id, interaction.user.id, hidden);
+      void sendLog(interaction.guild, 'friends', `${interaction.member} がフレンド候補に${hidden ? '出ないようにしました' : '出るようにしました'}`, interaction.member);
+      const note = hidden ? '🙈 ほかの人のフレンド候補に出ないようにしました。' : '🙋 ほかの人のフレンド候補に出るようにしました。';
+      await interaction.editReply(withFiles(await friendsScreen(interaction.member, 0, note)));
+      return;
+    }
     case 'rank-hide': {
       const hidden = value === 'on';
       await setRankingHidden(interaction.member, hidden);
@@ -706,6 +742,63 @@ const inviteMeScreen = (member: GuildMember, note?: string): Screen => {
       toRow(
         toggleButton(customId('inviteme', 'on'), '付ける', on).setEmoji({ name: '🙌' }),
         toggleButton(customId('inviteme', 'off'), '付けない', !on),
+      ),
+    ],
+  };
+};
+
+/** フレンド候補の画面（近い順に5人ずつ）。note は設定を変えたときに一番上に出す一言 */
+const friendsScreen = async (member: GuildMember, page: number, note?: string): Promise<Screen> => {
+  const [candidates, hidden] = await Promise.all([findFriendCandidates(member), loadFriendsHidden(member.guild.id, member.id)]);
+  if (!candidates) return { content: `フレンド候補は、プロフィールを登録した人が使えます。${notRegisteredMessage()}`, components: [] };
+
+  const pages = Math.max(1, Math.ceil(candidates.length / FRIENDS_PER_PAGE));
+  const current = Math.min(Math.max(0, page), pages - 1);
+  const shown = candidates.slice(current * FRIENDS_PER_PAGE, (current + 1) * FRIENDS_PER_PAGE);
+  const lines = shown.map((candidate, i) => {
+    const recent = candidate.profile.recent.replace(/\n/g, ' ');
+    return [
+      `**${current * FRIENDS_PER_PAGE + i + 1}.** ${boldName(candidate.member)}（${describeWorld(candidate.profile)}）`,
+      candidate.reasons.join('・'),
+      ...(recent ? [`🕹️ ${recent.length > MAX_RECENT_IN_FRIENDS ? `${recent.slice(0, MAX_RECENT_IN_FRIENDS)}…` : recent}`] : []),
+      ...(candidate.profileUrl ? [`[プロフィールを見る](${candidate.profileUrl})`] : []),
+    ].join('\n');
+  });
+  const embed = new EmbedBuilder()
+    .setColor(0x57f287)
+    .setTitle(`🤝 気が合いそうな人${candidates.length > 0 ? `（${candidates.length}人）` : ''}`)
+    .setDescription(
+      lines.length > 0
+        ? lines.join('\n\n')
+        : 'まだ近い人が見つかりません。ワールド・活動時間・よく遊ぶコンテンツを登録している人が増えると出てきます（自分の分も、プロフィールの設定で増やせます）。',
+    )
+    .setFooter({
+      text: `ワールド・遊ぶ時間・よく遊ぶコンテンツ・進行度が近い順です${pages > 1 ? `（${current + 1}/${pages}ページ）` : ''}。声をかけるときは、まず雑談やPT募集から。DMやフレンド申請は、相手の許可を取ってから送ってください。`,
+    });
+  const pageButtons =
+    pages > 1
+      ? [
+          toRow(
+            new ButtonBuilder().setCustomId(customId('friends', String(current - 1))).setLabel('前へ').setEmoji({ name: '◀️' }).setStyle(ButtonStyle.Secondary).setDisabled(current === 0),
+            new ButtonBuilder().setCustomId(customId('friends', String(current + 1))).setLabel('次へ').setEmoji({ name: '▶️' }).setStyle(ButtonStyle.Secondary).setDisabled(current >= pages - 1),
+          ),
+        ]
+      : [];
+  return {
+    content: [
+      ...(note ? [note, ''] : []),
+      '🤝 **フレンド候補**',
+      hidden ? 'あなたは今、ほかの人のフレンド候補に出ない設定です。' : 'あなたも、近い人のフレンド候補に出ます（出たくなければ、下のボタンで止められます）。',
+    ].join('\n'),
+    embeds: [embed],
+    components: [
+      ...pageButtons,
+      toRow(
+        new ButtonBuilder()
+          .setCustomId(customId('friends-hide', hidden ? 'off' : 'on'))
+          .setLabel(hidden ? '候補に出す' : '自分を候補に出さない')
+          .setEmoji({ name: hidden ? '🙋' : '🙈' })
+          .setStyle(ButtonStyle.Secondary),
       ),
     ],
   };

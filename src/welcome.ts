@@ -39,7 +39,7 @@ export const buildWelcomeEmbed = async (guild: Guild, settings: WelcomeSettings)
       },
       {
         name: '2️⃣ 自分の設定',
-        value: `VC通知・「いつでも誘って」・自分専用の招待リンクなどを、自分で切り替えられます。${go('settings', '設定パネルへ')}`,
+        value: `VC通知・「いつでも誘って」・自分専用の招待リンクなどの設定や、気が合いそうな人（フレンド候補）探しができます。${go('settings', '設定パネルへ')}`,
       },
       {
         name: '3️⃣ 一緒に遊ぶ',
