@@ -69,6 +69,7 @@ import {
 } from '../adminTools.js';
 import { loadWelcomeSettings } from '../guildSettings.js';
 import { fetchAllMembers } from '../guildUtils.js';
+import { ADMIN_BUTTON_ID as HOUSING_ADMIN_BUTTON_ID } from '../housing.js';
 import { INACTIVE_ROLE_NAME } from '../inactiveRole.js';
 import { addDays, formatShortDateTime, jstDay } from '../jst.js';
 import { nameById, nameWithUsername } from '../names.js';
@@ -181,6 +182,7 @@ export const buildPanel = (): PanelPayload => {
         '**申請の自動許可**: プロフィールの申請を、管理者の確認なしですぐ許可するかどうか',
         '**入った人への案内**: 入った人にDMで送る案内（プロフ登録・設定・PT募集への行き方）。送る・送らないと、一言を変えられます',
         `**非アクティブ**: しばらく発言・リアクション・VCがない人に「${INACTIVE_ROLE_NAME}」ロールを付けるか、何日で付けるか（7〜60日）`,
+        '**ハウジング抽選**: 抽選のお知らせの日程を合わせます（一度合わせれば、あとは9日ごとに自動で計算）',
         '',
         '__**🔎 調べる**__',
         '**メンバーの詳細**: 1人の参加日・招待リンク・プロフィール・レベル・最後に来た日・設定・ロール・最近のログをまとめて見ます',
@@ -205,6 +207,8 @@ export const buildPanel = (): PanelPayload => {
     panelButton(AUTO_APPROVE_BUTTON_ID, '申請の自動許可', '✅', ButtonStyle.Secondary),
     panelButton(WELCOME_BUTTON_ID, '入った人への案内', '👋', ButtonStyle.Secondary),
     panelButton(IDLE_ROLE_BUTTON_ID, '非アクティブ', '🌙', ButtonStyle.Secondary),
+    // 押されたときはハウジング抽選の画面（housing.ts）が受け取る
+    panelButton(HOUSING_ADMIN_BUTTON_ID, 'ハウジング抽選', '🏠', ButtonStyle.Secondary),
   );
   const lookupRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     panelButton(KARTE_BUTTON_ID, 'メンバーの詳細', '🗂️', ButtonStyle.Secondary),

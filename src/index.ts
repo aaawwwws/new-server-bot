@@ -70,6 +70,7 @@ import { VC_ROLE_NAME, ensureVcRole } from './vcRole.js';
 import { handleVoiceStateUpdate } from './voiceJoinNotice.js';
 import * as voiceStatus from './voiceStatus.js';
 import { WELCOME_RESULT_LABELS, sendWelcome } from './welcome.js';
+import * as housing from './housing.js';
 import * as submarines from './submarines.js';
 import { startBoostCache } from './xpBoost.js';
 
@@ -171,6 +172,8 @@ client.once(Events.ClientReady, async (readyClient) => {
   startInactiveRoles(readyClient);
   // 帰ってきた潜水艦を、1分ごとに本人へDMで知らせる（Botが止まっていた間の分も）
   submarines.startSubmarineNotices(readyClient);
+  // ハウジング抽選の受付・締め切り前・結果発表を「通知」チャンネルに流す（結果発表は、申し込みメモの人にDMも）
+  housing.startHousingNotices(readyClient);
 });
 
 const LOG_RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -216,6 +219,10 @@ const prepareGuild = async (guild: Guild): Promise<void> => {
     reportError(`「${guild.name}」に「${INACTIVE_ROLE_NAME}」ロールを作れませんでした`, error, guild);
     return null;
   });
+  const housingRole = await housing.ensureHousingRole(guild).catch((error: unknown) => {
+    reportError(`「${guild.name}」に「${housing.HOUSING_ROLE_NAME}」ロールを作れませんでした`, error, guild);
+    return null;
+  });
   const titleRoles = await ensureTitleRoles(guild).catch((error: unknown): string[] => {
     reportError(`「${guild.name}」に称号のロールを作れませんでした`, error, guild);
     return [];
@@ -239,6 +246,13 @@ const prepareGuild = async (guild: Guild): Promise<void> => {
       guild,
       'system',
       `「${INACTIVE_ROLE_NAME}」ロールがなかったので作成しました。しばらく発言・リアクション・VCがない人に付きます（日数とオン・オフは管理パネルの「非アクティブ」で変えられます）`,
+    );
+  }
+  if (housingRole) {
+    await sendLog(
+      guild,
+      'system',
+      `「${housing.HOUSING_ROLE_NAME}」ロールがなかったので作成しました。設定パネルの「ハウジング抽選」で本人が付け外しでき、抽選のお知らせでメンションされます`,
     );
   }
   if (titleRoles.length > 0) {
@@ -332,6 +346,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await voiceStatus.handleModalSubmit(interaction);
     } else if (interaction.isModalSubmit() && interaction.customId.startsWith(submarines.CUSTOM_ID_PREFIX)) {
       await submarines.handleModalSubmit(interaction);
+    } else if (interaction.isButton() && interaction.customId.startsWith(housing.CUSTOM_ID_PREFIX)) {
+      await housing.handleButton(interaction);
+    } else if (interaction.isModalSubmit() && interaction.customId.startsWith(housing.CUSTOM_ID_PREFIX)) {
+      await housing.handleModalSubmit(interaction);
     }
   } catch (error) {
     reportError(`操作の処理に失敗しました（${interaction.isRepliable() ? interactionLabel(interaction) : interaction.type}）`, error, interaction.guild);

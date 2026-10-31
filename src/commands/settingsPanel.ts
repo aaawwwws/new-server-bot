@@ -37,6 +37,7 @@ import {
   type JoinAnnounceSettings,
 } from '../memberSettings.js';
 import { boldName } from '../names.js';
+import { OPEN_BUTTON_ID as HOUSING_OPEN_BUTTON_ID } from '../housing.js';
 import { OPEN_BUTTON_ID as SUBMARINE_OPEN_BUTTON_ID } from '../submarines.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import { RECENT_LABEL, buildProfileEmbed, describeJobs, describeTime, describeWorld, type Profile } from '../profile.js';
@@ -204,6 +205,9 @@ export const buildPanel = (): PanelPayload => {
         '',
         '**🚢 潜水艦**',
         '潜水艦の帰ってくる時間を登録すると、帰ってきたときにDMでお知らせします（4隻まで。`/潜水艦` でも開けます）。',
+        '',
+        '**🏠 ハウジング抽選**',
+        '抽選の受付の始まり・締め切り前・結果発表を「通知」チャンネルでお知らせします（「ハウジング抽選」ロールの人にメンション）。申し込んだ区画をメモしておくと、結果発表のときにDMでもお知らせします。',
       ].join('\n'),
     )
     .setColor(0x5865f2);
@@ -217,8 +221,9 @@ export const buildPanel = (): PanelPayload => {
   // 1行に5つまでなので、2行目に置く
   const secondRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(FRIENDS_MENU_ID).setLabel('フレンド候補').setEmoji({ name: '🤝' }).setStyle(ButtonStyle.Primary),
-    // 押されたときは潜水艦の画面（submarines.ts）が受け取る
+    // 押されたときは潜水艦（submarines.ts）・ハウジング抽選（housing.ts）の画面が受け取る
     new ButtonBuilder().setCustomId(SUBMARINE_OPEN_BUTTON_ID).setLabel('潜水艦').setEmoji({ name: '🚢' }).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(HOUSING_OPEN_BUTTON_ID).setLabel('ハウジング抽選').setEmoji({ name: '🏠' }).setStyle(ButtonStyle.Primary),
   );
   return { embeds: [embed], components: [row, secondRow] };
 };

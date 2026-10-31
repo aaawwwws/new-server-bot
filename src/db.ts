@@ -176,6 +176,29 @@ export const initDatabase = async (): Promise<void> => {
   // 決めた日数来ていない人に「非アクティブ」ロールを付けるか（最初は付ける・14日）
   await pool.query('ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS inactive_role_enabled boolean NOT NULL DEFAULT true');
   await pool.query('ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS inactive_role_days smallint NOT NULL DEFAULT 14');
+  // ハウジング抽選の日程。housing_anchor はある回の受付の終わり（＝結果発表の始まり）。そこから9日ごと（受付5日・結果発表4日）に繰り返す
+  await pool.query('ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS housing_anchor timestamptz');
+  // 申し込みメモ。results_at はその回の結果発表の始まり（そのときに、メモを残した人へ DM で知らせる）
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS housing_entries (
+      guild_id   text        NOT NULL,
+      user_id    text        NOT NULL,
+      results_at timestamptz NOT NULL,
+      plot       text        NOT NULL,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (guild_id, user_id, results_at)
+    )
+  `);
+  // 送ったお知らせ（同じお知らせを二重に送らないため）。kind は entry（受付）/ deadline（締め切り前）/ results（結果発表）
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS housing_notices (
+      guild_id text        NOT NULL,
+      kind     text        NOT NULL,
+      event_at timestamptz NOT NULL,
+      sent_at  timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (guild_id, kind, event_at)
+    )
+  `);
   // 潜水艦の帰ってくる時間（1人4隻まで）。帰ってきたら DM で知らせて notified_at を付ける。
   // minutes は登録したときの帰ってくるまでの長さ（「同じ時間でもう一度」で使う）
   await pool.query(`

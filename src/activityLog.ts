@@ -71,6 +71,7 @@ const LOG_STYLES = {
   inactive: { label: '非アクティブ', color: 0x95a5a6 },
   friends: { label: 'フレンド候補の設定', color: 0x57f287 },
   submarine: { label: '潜水艦', color: 0x3498db },
+  housing: { label: 'ハウジング抽選', color: 0x2ecc71 },
   level: { label: 'レベル・ランキング', color: 0xf1c40f },
   messageDelete: { label: 'メッセージ削除', color: 0xe67e22 },
   messageEdit: { label: 'メッセージ編集', color: 0xf1c40f },
