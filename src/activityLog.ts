@@ -70,6 +70,7 @@ const LOG_STYLES = {
   autoApprove: { label: '申請の自動許可の設定', color: 0x57f287 },
   inactive: { label: '非アクティブ', color: 0x95a5a6 },
   friends: { label: 'フレンド候補の設定', color: 0x57f287 },
+  submarine: { label: '潜水艦', color: 0x3498db },
   level: { label: 'レベル・ランキング', color: 0xf1c40f },
   messageDelete: { label: 'メッセージ削除', color: 0xe67e22 },
   messageEdit: { label: 'メッセージ編集', color: 0xf1c40f },

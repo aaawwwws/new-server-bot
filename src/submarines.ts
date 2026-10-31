@@ -14,6 +14,7 @@ import {
   type Client,
   type ModalSubmitInteraction,
 } from 'discord.js';
+import { sendLog } from './activityLog.js';
 import { formatDuration } from './duration.js';
 import { reportError } from './errorReporter.js';
 import { formatShortDateTime, parseJstDateTime } from './jst.js';
@@ -192,14 +193,25 @@ export const handleModalSubmit = async (interaction: ModalSubmitInteraction<'cac
   const now = new Date();
   let note: string;
   if (!time) {
-    note = (await deleteSubmarine(guild.id, user.id, slot)) ? `🗑️ ${slotLabel(slot, name)}の登録を取り消しました。` : `${slot}隻目は登録されていません。`;
+    const deleted = await deleteSubmarine(guild.id, user.id, slot);
+    note = deleted ? `🗑️ ${slotLabel(slot, name)}の登録を取り消しました。` : `${slot}隻目は登録されていません。`;
+    if (deleted) {
+      void sendLog(guild, 'submarine', `${interaction.member} が潜水艦の登録を取り消しました（${slotLabel(slot, name)}）`, interaction.member, {
+        title: '潜水艦の登録の取り消し',
+      });
+    }
   } else {
     const voyage = parseVoyage(time, now);
     if (typeof voyage === 'string') {
       note = `⚠ ${voyage}`;
     } else {
       await saveSubmarine({ guildId: guild.id, userId: user.id, slot, name, returnsAt: voyage.returnsAt, minutes: voyage.minutes });
-      note = `✅ ${slotLabel(slot, name)}: **${formatShortDateTime(voyage.returnsAt)}** に帰ってきます（あと ${formatDuration(voyage.returnsAt.getTime() - now.getTime())}）。帰ってきたらDMでお知らせします。`;
+      const left = formatDuration(voyage.returnsAt.getTime() - now.getTime());
+      note = `✅ ${slotLabel(slot, name)}: **${formatShortDateTime(voyage.returnsAt)}** に帰ってきます（あと ${left}）。帰ってきたらDMでお知らせします。`;
+      void sendLog(guild, 'submarine', `${interaction.member} が潜水艦を登録しました（${slotLabel(slot, name)}）`, interaction.member, {
+        title: '潜水艦の登録',
+        fields: [{ name: '🕒 帰ってくる時間', value: `${formatShortDateTime(voyage.returnsAt)}（あと ${left}）`, inline: true }],
+      });
     }
   }
   await interaction.editReply(await submarineScreen(guild.id, user.id, note, now));
@@ -225,6 +237,15 @@ const relaunchFromDm = async (interaction: ButtonInteraction): Promise<void> => 
     content: `${interaction.message.content}\n🔁 ${slotLabel(timer.slot, timer.name)}: **${formatShortDateTime(timer.returnsAt)}** に帰ってきます（${formatDuration(timer.minutes * 60_000)}）。`,
     components: rest.length > 0 ? [new ActionRowBuilder<ButtonBuilder>().addComponents(rest)] : [],
   });
+  // DMで押されるので、ログはそのサーバーに残す（Botがもういないサーバーなら残さない）
+  const guild = interaction.client.guilds.cache.get(guildId);
+  if (guild) {
+    const actor = guild.members.cache.get(interaction.user.id) ?? interaction.user;
+    void sendLog(guild, 'submarine', `${interaction.user} が潜水艦を同じ時間でもう一度出しました（${slotLabel(timer.slot, timer.name)}）`, actor, {
+      title: '潜水艦の再出航',
+      fields: [{ name: '🕒 帰ってくる時間', value: `${formatShortDateTime(timer.returnsAt)}（あと ${formatDuration(timer.minutes * 60_000)}）`, inline: true }],
+    });
+  }
 };
 
 // ---- 帰ってきたときのDM
@@ -255,7 +276,7 @@ const returnedMessage = (guildName: string, timers: SubmarineTimer[], now: Date)
   };
 };
 
-/** 帰ってきたものを、本人にDMで知らせる。サーバーを抜けた人には送らない */
+/** 帰ってきたものを、本人にDMで知らせて、ログに残す。サーバーを抜けた人には送らない */
 export const notifyReturnedSubmarines = async (client: Client<true>, now: Date = new Date()): Promise<void> => {
   const groups = new Map<string, SubmarineTimer[]>();
   for (const timer of await claimReturnedSubmarines(now)) {
@@ -265,10 +286,25 @@ export const notifyReturnedSubmarines = async (client: Client<true>, now: Date =
   for (const timers of groups.values()) {
     const [{ guildId, userId }] = timers as [SubmarineTimer, ...SubmarineTimer[]];
     const guild = client.guilds.cache.get(guildId);
-    const member = guild ? await guild.members.fetch(userId).catch(() => null) : null;
-    if (!guild || !member) continue;
-    await member.send(returnedMessage(guild.name, timers, now)).catch((error: unknown) => {
-      console.warn(`潜水艦の帰還を「${member.user.tag}」にDMで送れませんでした:`, error);
+    if (!guild) continue;
+    const member = await guild.members.fetch(userId).catch(() => null);
+    const dm = member
+      ? await member.send(returnedMessage(guild.name, timers, now)).then(
+          () => '送りました',
+          (error: unknown) => {
+            console.warn(`潜水艦の帰還を「${member.user.tag}」にDMで送れませんでした:`, error);
+            return '送れませんでした（DMを受け付けていない設定）';
+          },
+        )
+      : 'サーバーにいないため送りませんでした';
+    const late = timers.some((timer) => now.getTime() - timer.returnsAt.getTime() > LATE_NOTICE_MS);
+    void sendLog(guild, 'submarine', `<@${userId}> の潜水艦が帰ってきました（${timers.map((t) => slotLabel(t.slot, t.name)).join('・')}）`, member ?? undefined, {
+      title: '潜水艦の帰還',
+      ...(member ? {} : { target: userId }),
+      fields: [
+        { name: '🕒 帰ってきた時間', value: [...new Set(timers.map((t) => formatShortDateTime(t.returnsAt)))].join('・'), inline: true },
+        { name: '✉️ お知らせのDM', value: `${dm}${late ? '（Botが止まっていたため遅れて）' : ''}`, inline: true },
+      ],
     });
   }
 };
