@@ -58,6 +58,31 @@ export const formatDay = (day: string): string => {
   return `${month}/${date}（${WEEKDAYS[weekday]}）`;
 };
 
+/**
+ * 「10/31 20:00」「10/31 20」「2026/10/31 20:00」の形の日時を読む（日本時間）。年を省いたときは、1日より前の日付なら来年とみなす。
+ * 形が違えば 'format'、ない日時（2/30 や 25時）なら 'invalid'
+ */
+export const parseJstDateTime = (text: string, now: Date): Date | 'format' | 'invalid' => {
+  const match = /^(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})\s+(\d{1,2})(?::(\d{2}))?$/.exec(text);
+  if (!match) return 'format';
+
+  const [, yearText, monthText, dayText, hourText, minuteText] = match;
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText ?? 0);
+  const build = (year: number): Date | null => {
+    const date = fromJst(year, month, day, hour, minute);
+    const jst = toJst(date);
+    // 2/30 や 25時 のように、繰り上がってしまう日時は受け付けない
+    return jst.month === month && jst.day === day && jst.hour === hour && jst.minute === minute ? date : null;
+  };
+  const thisYear = toJst(now).year;
+  let date = build(yearText ? Number(yearText) : thisYear);
+  if (date && !yearText && date.getTime() < now.getTime() - DAY_MS) date = build(thisYear + 1);
+  return date ?? 'invalid';
+};
+
 /** 「10/22 21:05」（日本時間） */
 export const formatShortDateTime = (date: Date): string => {
   const { month, day, hour, minute } = toJst(date);

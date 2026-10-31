@@ -176,6 +176,21 @@ export const initDatabase = async (): Promise<void> => {
   // 決めた日数来ていない人に「非アクティブ」ロールを付けるか（最初は付ける・14日）
   await pool.query('ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS inactive_role_enabled boolean NOT NULL DEFAULT true');
   await pool.query('ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS inactive_role_days smallint NOT NULL DEFAULT 14');
+  // 潜水艦の帰ってくる時間（1人4隻まで）。帰ってきたら DM で知らせて notified_at を付ける。
+  // minutes は登録したときの帰ってくるまでの長さ（「同じ時間でもう一度」で使う）
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS submarine_timers (
+      guild_id    text        NOT NULL,
+      user_id     text        NOT NULL,
+      slot        smallint    NOT NULL,
+      name        text        NOT NULL DEFAULT '',
+      returns_at  timestamptz NOT NULL,
+      minutes     integer     NOT NULL,
+      notified_at timestamptz,
+      updated_at  timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (guild_id, user_id, slot)
+    )
+  `);
   // 最後に来た日（発言・リアクション・VCに入った）。XPにならないもの（XPなしチャンネル・1人のVCなど）も含む。非アクティブの判定に使う
   await pool.query(`
     CREATE TABLE IF NOT EXISTS member_last_active (

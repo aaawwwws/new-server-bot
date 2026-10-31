@@ -39,6 +39,7 @@ import * as rankingBoard from './commands/rankingBoard.js';
 import * as recruitList from './commands/recruitList.js';
 import * as recruitPanel from './commands/recruitPanel.js';
 import * as settingsPanel from './commands/settingsPanel.js';
+import * as submarine from './commands/submarine.js';
 import { closeDatabase, initDatabase } from './db.js';
 import { reportError, setErrorReportClient } from './errorReporter.js';
 import { loadAllGuildSettings } from './guildSettings.js';
@@ -69,6 +70,7 @@ import { VC_ROLE_NAME, ensureVcRole } from './vcRole.js';
 import { handleVoiceStateUpdate } from './voiceJoinNotice.js';
 import * as voiceStatus from './voiceStatus.js';
 import { WELCOME_RESULT_LABELS, sendWelcome } from './welcome.js';
+import * as submarines from './submarines.js';
 import { startBoostCache } from './xpBoost.js';
 
 const commands = [
@@ -84,9 +86,10 @@ const commands = [
   memberSearch,
   level,
   ranking,
+  submarine,
 ];
 /** 管理者以外も使えるコマンド（ほかはパネルの設置用なので「管理者」ロールの人だけ） */
-const PUBLIC_COMMANDS = new Set([memberSearch.data.name, level.data.name, ranking.data.name]);
+const PUBLIC_COMMANDS = new Set([memberSearch.data.name, level.data.name, ranking.data.name, submarine.data.name]);
 
 const token = process.env.DISCORD_TOKEN;
 if (!token) {
@@ -166,6 +169,8 @@ client.once(Events.ClientReady, async (readyClient) => {
   startAdminReports(readyClient);
   // しばらく来ていない人に「非アクティブ」を付ける（起動時と、そのあと日が変わるたび。また来たら、すぐ外す）
   startInactiveRoles(readyClient);
+  // 帰ってきた潜水艦を、1分ごとに本人へDMで知らせる（Botが止まっていた間の分も）
+  submarines.startSubmarineNotices(readyClient);
 });
 
 const LOG_RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -260,6 +265,16 @@ const prepareGuild = async (guild: Guild): Promise<void> => {
 };
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  // 潜水艦のボタンは、帰還のDM（サーバーの外）でも押される
+  if (interaction.isButton() && interaction.customId.startsWith(submarines.CUSTOM_ID_PREFIX)) {
+    try {
+      await submarines.handleButton(interaction);
+    } catch (error) {
+      reportError(`潜水艦の操作に失敗しました（${interaction.customId}）`, error, interaction.guild ?? undefined);
+      await replyError(interaction, error);
+    }
+    return;
+  }
   if (!interaction.inCachedGuild()) return;
 
   try {
@@ -315,6 +330,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await voiceStatus.handleButton(interaction);
     } else if (interaction.isModalSubmit() && interaction.customId.startsWith(voiceStatus.CUSTOM_ID_PREFIX)) {
       await voiceStatus.handleModalSubmit(interaction);
+    } else if (interaction.isModalSubmit() && interaction.customId.startsWith(submarines.CUSTOM_ID_PREFIX)) {
+      await submarines.handleModalSubmit(interaction);
     }
   } catch (error) {
     reportError(`操作の処理に失敗しました（${interaction.isRepliable() ? interactionLabel(interaction) : interaction.type}）`, error, interaction.guild);

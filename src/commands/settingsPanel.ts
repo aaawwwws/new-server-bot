@@ -37,6 +37,7 @@ import {
   type JoinAnnounceSettings,
 } from '../memberSettings.js';
 import { boldName } from '../names.js';
+import { OPEN_BUTTON_ID as SUBMARINE_OPEN_BUTTON_ID } from '../submarines.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import { RECENT_LABEL, buildProfileEmbed, describeJobs, describeTime, describeWorld, type Profile } from '../profile.js';
 import {
@@ -200,6 +201,9 @@ export const buildPanel = (): PanelPayload => {
         '',
         '**🤝 フレンド候補**',
         'ワールド・遊ぶ時間・よく遊ぶコンテンツが近い、気が合いそうな人を紹介します（プロフィールを登録した人だけ）。',
+        '',
+        '**🚢 潜水艦**',
+        '潜水艦の帰ってくる時間を登録すると、帰ってきたときにDMでお知らせします（4隻まで。`/潜水艦` でも開けます）。',
       ].join('\n'),
     )
     .setColor(0x5865f2);
@@ -213,6 +217,8 @@ export const buildPanel = (): PanelPayload => {
   // 1行に5つまでなので、2行目に置く
   const secondRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(FRIENDS_MENU_ID).setLabel('フレンド候補').setEmoji({ name: '🤝' }).setStyle(ButtonStyle.Primary),
+    // 押されたときは潜水艦の画面（submarines.ts）が受け取る
+    new ButtonBuilder().setCustomId(SUBMARINE_OPEN_BUTTON_ID).setLabel('潜水艦').setEmoji({ name: '🚢' }).setStyle(ButtonStyle.Primary),
   );
   return { embeds: [embed], components: [row, secondRow] };
 };

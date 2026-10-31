@@ -1,6 +1,6 @@
 import type { Client } from 'discord.js';
 import { pool } from './db.js';
-import { formatShortDateTime, fromJst, toJst } from './jst.js';
+import { formatShortDateTime, parseJstDateTime } from './jst.js';
 
 // XPアップ期間。管理者が決めた期間だけ、発言とVCでもらえるXPを増やす（重なっているときは大きい方）
 
@@ -148,24 +148,9 @@ export const describeBoost = (guildId: string, now: Date = new Date()): string |
 export const parseBoostStart = (input: string, now: Date): Date | string => {
   const text = input.normalize('NFKC').trim();
   if (text === '' || text === '今' || text === '今すぐ') return now;
-  const match = /^(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})\s+(\d{1,2})(?::(\d{2}))?$/.exec(text);
-  if (!match) return '開始は「10/31 20:00」の形で入力してください（空欄なら今すぐ始まります）。';
-
-  const [, yearText, monthText, dayText, hourText, minuteText] = match;
-  const month = Number(monthText);
-  const day = Number(dayText);
-  const hour = Number(hourText);
-  const minute = Number(minuteText ?? 0);
-  const build = (year: number): Date | null => {
-    const date = fromJst(year, month, day, hour, minute);
-    const jst = toJst(date);
-    // 2/30 や 25時 のように、繰り上がってしまう日時は受け付けない
-    return jst.month === month && jst.day === day && jst.hour === hour && jst.minute === minute ? date : null;
-  };
-  const thisYear = toJst(now).year;
-  let start = build(yearText ? Number(yearText) : thisYear);
-  if (start && !yearText && start.getTime() < now.getTime() - DAY_MS) start = build(thisYear + 1);
-  if (!start) return `「${text}」という日時はありません。`;
+  const start = parseJstDateTime(text, now);
+  if (start === 'format') return '開始は「10/31 20:00」の形で入力してください（空欄なら今すぐ始まります）。';
+  if (start === 'invalid') return `「${text}」という日時はありません。`;
   if (start.getTime() < now.getTime() - PAST_GRACE_MS) return `${formatShortDateTime(start)} はもう過ぎています。`;
   if (start.getTime() > now.getTime() + MAX_START_DAYS * DAY_MS) return `開始は${MAX_START_DAYS}日先までにしてください。`;
   return start.getTime() < now.getTime() ? now : start;
