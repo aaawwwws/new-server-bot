@@ -13,7 +13,9 @@ while true; do
   day=$(date -u -d "@$jst" +%Y%m%d)
   hour=$(date -u -d "@$jst" +%H)
   file="/backups/bot-$day.sql.gz"
-  first=$(find /backups -name 'bot-*.sql.gz' | head -n 1)
+  # 1つでもあるかだけ分かればよい。head につなぐと、find が書き終わる前に head が終わったとき
+  # find が SIGPIPE で止まり、pipefail でスクリプトごと終わってしまう（コンテナが再起動を繰り返す）ので、つながない
+  first=$(find /backups -name 'bot-*.sql.gz')
   if [ ! -f "$file" ] && { [ "$hour" -ge 4 ] || [ -z "$first" ]; }; then
     if pg_dump --clean --if-exists --no-owner | gzip > "$file.tmp"; then
       mv "$file.tmp" "$file"
