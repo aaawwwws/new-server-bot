@@ -377,6 +377,30 @@ export const initDatabase = async (): Promise<void> => {
   await pool.query('CREATE INDEX IF NOT EXISTS voice_sessions_open ON voice_sessions (guild_id, user_id) WHERE left_at IS NULL');
   await pool.query('CREATE INDEX IF NOT EXISTS voice_sessions_time ON voice_sessions (guild_id, joined_at DESC)');
 
+  // 一時VCの入口（ここに入ると、その人の部屋ができる）。category_id は部屋を作るカテゴリー（null なら入口と同じ場所）。
+  // name_template の {name} は入った人の名前。user_limit は部屋の人数の上限（0 は上限なし）
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS temp_voice_lobbies (
+      channel_id    text        PRIMARY KEY,
+      guild_id      text        NOT NULL,
+      category_id   text,
+      name_template text        NOT NULL,
+      user_limit    smallint    NOT NULL DEFAULT 0,
+      created_at    timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  // 今ある一時VCの部屋（Botが止まっている間に空になった部屋を、起動時に片付けるため）。招待とBANはVCの権限に残るので、ここには持たない
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS temp_voice_rooms (
+      channel_id       text        PRIMARY KEY,
+      guild_id         text        NOT NULL,
+      owner_id         text        NOT NULL,
+      locked           boolean     NOT NULL DEFAULT false,
+      panel_message_id text,
+      created_at       timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+
   // 設置したパネルの場所。起動時にパネルを最新の内容に作り直す（payload_hash は前回の内容。変わったときだけ編集する）
   await pool.query(`
     CREATE TABLE IF NOT EXISTS panels (

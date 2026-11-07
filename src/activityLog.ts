@@ -4,6 +4,7 @@ import {
   MessageFlags,
   PermissionFlagsBits,
   channelMention,
+  escapeMarkdown,
   time,
   userMention,
   type APIEmbedField,
@@ -37,6 +38,7 @@ import {
 } from './logStore.js';
 import { nameById, nameWithUsername, replaceMentions } from './names.js';
 import { ADMIN_ROLE_NAME, findAdminRole } from './permissions.js';
+import { findRoom } from './tempVoiceStore.js';
 
 /** 行動ログを送るチャンネルの名前（なければログは送らない。DBには残す） */
 export const LOG_CHANNEL_NAME = 'ログ';
@@ -460,14 +462,16 @@ export const logVoiceActivity = async (oldState: VoiceState, newState: VoiceStat
   if (to) await openVoiceSession(member.guild.id, member.id, nameOfMember(member), to.id, now).catch(() => undefined);
 
   const people = (channel: VoiceBasedChannel): string => `${channel.members.filter((m) => !m.user.bot).size}人`;
+  // 一時VCはあとで消えて、メンションだと「不明」になるので名前で出す
+  const label = (channel: VoiceBasedChannel): string => (findRoom(channel.id) ? `🔊 ${escapeMarkdown(channel.name)}` : `${channel}`);
   if (!from && to) {
-    await sendLog(newState.guild, 'voice', `${member} が ${to} に入室しました`, member, {
+    await sendLog(newState.guild, 'voice', `${member} が ${label(to)} に入室しました`, member, {
       title: 'VC入室',
       channel: to,
       fields: [{ name: '👥 入室後の人数', value: people(to), inline: true }],
     });
   } else if (from && !to) {
-    await sendLog(newState.guild, 'voice', `${member} が ${from} から退出しました`, member, {
+    await sendLog(newState.guild, 'voice', `${member} が ${label(from)} から退出しました`, member, {
       title: 'VC退出',
       channel: from,
       fields: [
@@ -476,11 +480,11 @@ export const logVoiceActivity = async (oldState: VoiceState, newState: VoiceStat
       ],
     });
   } else if (from && to) {
-    await sendLog(newState.guild, 'voice', `${member} が ${from} → ${to} に移動しました`, member, {
+    await sendLog(newState.guild, 'voice', `${member} が ${label(from)} → ${label(to)} に移動しました`, member, {
       title: 'VC移動',
       fields: [
-        { name: '⬅️ 移動元', value: `${from}`, inline: true },
-        { name: '➡️ 移動先', value: `${to}`, inline: true },
+        { name: '⬅️ 移動元', value: label(from), inline: true },
+        { name: '➡️ 移動先', value: label(to), inline: true },
         { name: '⏱️ 移動元にいた時間', value: stayed, inline: true },
         { name: '👥 移動先の人数', value: people(to), inline: true },
       ],

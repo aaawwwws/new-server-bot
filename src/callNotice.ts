@@ -6,6 +6,7 @@ import {
   EmbedBuilder,
   MessageFlags,
   PermissionFlagsBits,
+  escapeMarkdown,
   type GuildMember,
   type Role,
   type TextChannel,
@@ -15,6 +16,7 @@ import {
 import { formatDuration } from './duration.js';
 import { canBotPost, findTextChannel } from './guildUtils.js';
 import { loadJoinAnnounceOrDefault } from './memberSettings.js';
+import { findLobby } from './tempVoiceStore.js';
 import { findVcRole } from './vcRole.js';
 
 /** 通話の開始・終了のお知らせを流すチャンネルの名前 */
@@ -55,7 +57,8 @@ export const handleCallStateUpdate = async (oldState: VoiceState, newState: Voic
 };
 
 const onJoin = async (channel: VoiceBasedChannel, member: GuildMember): Promise<void> => {
-  if (channel.id === channel.guild.afkChannelId) return;
+  // 一時VCの入口は通るだけの場所（通話は、できた部屋の方で始まる）
+  if (channel.id === channel.guild.afkChannelId || findLobby(channel.id)) return;
 
   const current = sessions.get(channel.id);
   if (current) {
@@ -143,7 +146,8 @@ const onLeave = async (channel: VoiceBasedChannel): Promise<void> => {
       new EmbedBuilder()
         .setColor(0x95a5a6)
         .setTitle('🔇 通話が終了しました')
-        .setDescription(`${channel}`)
+        // 一時VCはこのときにはもう消えていて、メンションだと「不明」になるので名前で出す
+        .setDescription(channel.guild.channels.cache.has(channel.id) ? `${channel}` : `🔊 ${escapeMarkdown(channel.name)}`)
         .addFields(
           { name: `参加した人（${names.length}人）`, value: `${listed}${others}` },
           { name: '通話時間', value: duration },

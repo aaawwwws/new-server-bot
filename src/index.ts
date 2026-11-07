@@ -72,6 +72,7 @@ import * as voiceStatus from './voiceStatus.js';
 import { WELCOME_RESULT_LABELS, sendWelcome } from './welcome.js';
 import * as housing from './housing.js';
 import * as submarines from './submarines.js';
+import * as tempVoice from './tempVoice.js';
 import { startBoostCache } from './xpBoost.js';
 
 const commands = [
@@ -152,6 +153,10 @@ client.once(Events.ClientReady, async (readyClient) => {
     });
   }
 
+  // 一時VCの入口と部屋を読み込み、Botが止まっていた間の分を片付ける（空になった部屋を消す、入口で待っている人の部屋を作る など）
+  await tempVoice.startTempVoice(readyClient).catch((error: unknown) => {
+    reportError('一時VCを読み込めませんでした', error);
+  });
   // XPを入れないチャンネルとXPアップ期間を読み込み（XPアップは1分ごとに読み直す）、VCにいる人へ1分ごとに経験値を配る
   await loadAllGuildSettings(readyClient);
   startBoostCache(readyClient);
@@ -350,6 +355,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await housing.handleButton(interaction);
     } else if (interaction.isModalSubmit() && interaction.customId.startsWith(housing.CUSTOM_ID_PREFIX)) {
       await housing.handleModalSubmit(interaction);
+    } else if (interaction.isButton() && interaction.customId.startsWith(tempVoice.CUSTOM_ID_PREFIX)) {
+      await tempVoice.handleButton(interaction);
+    } else if (interaction.isModalSubmit() && interaction.customId.startsWith(tempVoice.CUSTOM_ID_PREFIX)) {
+      await tempVoice.handleModalSubmit(interaction);
     }
   } catch (error) {
     reportError(`操作の処理に失敗しました（${interaction.isRepliable() ? interactionLabel(interaction) : interaction.type}）`, error, interaction.guild);
@@ -372,6 +381,18 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   });
   noteVoiceActivity(oldState, newState).catch((error: unknown) => {
     reportError('VCに入った日を残せませんでした', error);
+  });
+  tempVoice.handleTempVoiceUpdate(oldState, newState).catch((error: unknown) => {
+    reportError('一時VCの処理に失敗しました', error, newState.guild);
+  });
+});
+
+// VCが消されたとき（一時VCの部屋や入口を手で消した、Botが部屋を消した など）
+client.on(Events.ChannelDelete, (channel) => {
+  if (channel.isDMBased()) return;
+  voiceStatus.forgetVoiceStatus(channel.id);
+  tempVoice.handleTempVoiceChannelDelete(channel.guild, channel.id).catch((error: unknown) => {
+    reportError('消されたVCの一時VCの記録を消せませんでした', error, channel.guild);
   });
 });
 

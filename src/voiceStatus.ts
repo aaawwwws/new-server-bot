@@ -20,6 +20,7 @@ import {
 } from 'discord.js';
 import { sendLog } from './activityLog.js';
 import { isAdmin } from './permissions.js';
+import { findLobby } from './tempVoiceStore.js';
 
 // VCステータス（VCの名前の下に出る「何をしているか」）。
 // 通話が始まったら、そのVCのチャットに設定ボタンを出す。Botが代わりに設定するので、Botには「チャンネルの管理」権限が要る
@@ -43,7 +44,7 @@ export const handleVoiceStatusPrompt = async (oldState: VoiceState, newState: Vo
   const channel = newState.channel;
   const member = newState.member;
   if (!channel || oldState.channelId === newState.channelId || !member || member.user.bot) return;
-  if (channel.id === channel.guild.afkChannelId || humansIn(channel) !== 1 || pending.has(channel.id)) return;
+  if (channel.id === channel.guild.afkChannelId || findLobby(channel.id) || humansIn(channel) !== 1 || pending.has(channel.id)) return;
 
   pending.add(channel.id);
   try {
@@ -71,6 +72,12 @@ export const trackVoiceStatus = (data: GatewayVoiceChannelStatusUpdateDispatchDa
   } else {
     currentStatus.delete(data.id);
   }
+};
+
+/** VCが消されたら、覚えていたものも消す（一時VCは次々に作っては消すので、溜まらないように） */
+export const forgetVoiceStatus = (channelId: string): void => {
+  currentStatus.delete(channelId);
+  promptMessages.delete(channelId);
 };
 
 const buildPrompt = (channel: VoiceBasedChannel, changedBy?: GuildMember) => {

@@ -72,6 +72,7 @@ import { fetchAllMembers } from '../guildUtils.js';
 import { ADMIN_BUTTON_ID as HOUSING_ADMIN_BUTTON_ID } from '../housing.js';
 import { INACTIVE_ROLE_NAME } from '../inactiveRole.js';
 import { addDays, formatShortDateTime, jstDay } from '../jst.js';
+import { ADMIN_BUTTON_ID as TEMP_VOICE_ADMIN_BUTTON_ID } from '../tempVoice.js';
 import { nameById, nameWithUsername } from '../names.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import { profileLogFields } from '../profile.js';
@@ -183,6 +184,7 @@ export const buildPanel = (): PanelPayload => {
         '**入った人への案内**: 入った人にDMで送る案内（プロフ登録・設定・PT募集への行き方）。送る・送らないと、一言を変えられます',
         `**非アクティブ**: しばらく発言・リアクション・VCがない人に「${INACTIVE_ROLE_NAME}」ロールを付けるか、何日で付けるか（7〜60日）`,
         '**ハウジング抽選**: 抽選のお知らせの日程を合わせます（一度合わせれば、あとは9日ごとに自動で計算）',
+        '**一時VC**: 入ると自分の部屋ができる入口のVCを決めます（作る場所・部屋の名前・人数の上限）',
         '',
         '__**🔎 調べる**__',
         '**メンバーの詳細**: 1人の参加日・招待リンク・プロフィール・レベル・最後に来た日・設定・ロール・最近のログをまとめて見ます',
@@ -209,6 +211,8 @@ export const buildPanel = (): PanelPayload => {
     panelButton(IDLE_ROLE_BUTTON_ID, '非アクティブ', '🌙', ButtonStyle.Secondary),
     // 押されたときはハウジング抽選の画面（housing.ts）が受け取る
     panelButton(HOUSING_ADMIN_BUTTON_ID, 'ハウジング抽選', '🏠', ButtonStyle.Secondary),
+    // 押されたときは一時VCの画面（tempVoice.ts）が受け取る
+    panelButton(TEMP_VOICE_ADMIN_BUTTON_ID, '一時VC', '🔊', ButtonStyle.Secondary),
   );
   const lookupRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     panelButton(KARTE_BUTTON_ID, 'メンバーの詳細', '🗂️', ButtonStyle.Secondary),
