@@ -479,6 +479,8 @@ client.on(Events.MessageCreate, (message) => {
   noteMessageActivity(message).catch((error: unknown) => {
     reportError('発言した日を残せませんでした', error);
   });
+  // 一時VCの部屋のチャットなら、静かになってから操作パネルを一番下に置き直す
+  tempVoice.handleTempVoiceMessage(message);
 });
 
 client.on(Events.MessageDelete, (message) => {

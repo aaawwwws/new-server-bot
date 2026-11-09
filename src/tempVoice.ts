@@ -25,6 +25,7 @@ import {
   type Collection,
   type Guild,
   type GuildMember,
+  type Message,
   type ModalSubmitInteraction,
   type VoiceBasedChannel,
   type VoiceChannel,
@@ -224,11 +225,17 @@ const panelPayload = (channel: VoiceChannel, room: VoiceRoom) => {
   };
 };
 
+/** 操作パネルを一番下に出し直す。新しいものを出してから前のものを消す（出せなかったときに、パネルがなくならないように） */
+const repostPanel = async (channel: VoiceChannel, room: VoiceRoom): Promise<void> => {
+  const message = await channel.send({ ...panelPayload(channel, room), flags: MessageFlags.SuppressNotifications, allowedMentions: { parse: [] } });
+  await saveRoom({ ...room, panelMessageId: message.id });
+  if (room.panelMessageId) await channel.messages.delete(room.panelMessageId).catch(() => undefined);
+};
+
 /** 操作パネルを今の状態に書き換える。消されていたら出し直す */
 const refreshPanel = async (channel: VoiceChannel, room: VoiceRoom): Promise<void> => {
-  const payload = panelPayload(channel, room);
   if (room.panelMessageId) {
-    const edited = await channel.messages.edit(room.panelMessageId, payload).then(
+    const edited = await channel.messages.edit(room.panelMessageId, panelPayload(channel, room)).then(
       () => true,
       (error: unknown) => {
         if (hasCode(error, RESTJSONErrorCodes.UnknownMessage)) return false;
@@ -237,8 +244,40 @@ const refreshPanel = async (channel: VoiceChannel, room: VoiceRoom): Promise<voi
     );
     if (edited) return;
   }
-  const message = await channel.send({ ...payload, flags: MessageFlags.SuppressNotifications, allowedMentions: { parse: [] } });
-  await saveRoom({ ...room, panelMessageId: message.id });
+  await repostPanel(channel, room);
+};
+
+/** 部屋のチャットの最後のメッセージがパネルでなければ、一番下に出し直す。最後がパネルなら書き換えるだけ */
+const bumpPanel = async (channel: VoiceChannel, room: VoiceRoom): Promise<void> => {
+  await (channel.lastMessageId === room.panelMessageId ? refreshPanel(channel, room) : repostPanel(channel, room));
+};
+
+/**
+ * 部屋のチャットに何か書かれたら（人の発言も、入室のお知らせなどのBotのメッセージも）、少し静かになってから操作パネルを一番下に置き直す。
+ * 話している途中でパネルが動くと読みにくいので、最後のメッセージからこの時間待つ
+ */
+const PANEL_BUMP_AFTER_MS = 10_000;
+const bumpTimers = new Map<string, NodeJS.Timeout>();
+
+export const handleTempVoiceMessage = (message: Message): void => {
+  if (!message.inGuild()) return;
+  const room = findRoom(message.channelId);
+  if (!room || message.id === room.panelMessageId) return;
+  const { guild, channelId } = message;
+  clearTimeout(bumpTimers.get(channelId));
+  const timer = setTimeout(() => {
+    bumpTimers.delete(channelId);
+    roomLock(channelId, async () => {
+      const latest = findRoom(channelId);
+      const channel = roomChannel(guild, channelId);
+      // 誰もいない部屋はすぐ消えるので、置き直さない（最後の人が書いてから抜けたときなど）
+      if (latest && channel && humansIn(channel).size > 0 && channel.lastMessageId !== latest.panelMessageId) await repostPanel(channel, latest);
+    }).catch((error: unknown) => {
+      reportError('一時VCの操作パネルを一番下に置き直せませんでした', error, guild);
+    });
+  }, PANEL_BUMP_AFTER_MS);
+  timer.unref();
+  bumpTimers.set(channelId, timer);
 };
 
 /** 部屋を消す。もう消えていても、後片付けは続ける */
@@ -396,6 +435,8 @@ export const handleTempVoiceUpdate = async (oldState: VoiceState, newState: Voic
 export const handleTempVoiceChannelDelete = async (guild: Guild, channelId: string): Promise<void> => {
   if (findRoom(channelId)) await deleteRoom(channelId);
   renamedAt.delete(channelId);
+  clearTimeout(bumpTimers.get(channelId));
+  bumpTimers.delete(channelId);
   if (findLobby(channelId)) {
     await deleteLobby(channelId);
     void sendLog(guild, 'voice', `一時VCの入口だったVC（${channelId}）が消されたので、入口の設定を消しました`, undefined, { title: '一時VC' });
@@ -419,7 +460,8 @@ const reconcileGuild = async (guild: Guild): Promise<void> => {
         await removeRoom(channel, room);
         return;
       }
-      await refreshPanel(channel, humans.has(room.ownerId) ? room : await handOver(channel, room, next));
+      // 止まっている間にパネルが埋もれていたら、一番下に出し直す
+      await bumpPanel(channel, humans.has(room.ownerId) ? room : await handOver(channel, room, next));
     });
   }
   for (const lobby of listLobbies(guild.id)) {
