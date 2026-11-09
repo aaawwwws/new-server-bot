@@ -403,6 +403,17 @@ export const initDatabase = async (): Promise<void> => {
     )
   `);
 
+  // 流したメンテナンス・障害のお知らせ（FF14公式のニュース）。entry_id は記事のID、kind は news（記事）/ reminder（始まる前）/ seed（初めて読んだ印）
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS maintenance_notices (
+      guild_id  text        NOT NULL,
+      entry_id  text        NOT NULL,
+      kind      text        NOT NULL,
+      posted_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (guild_id, entry_id, kind)
+    )
+  `);
+
   // 設置したパネルの場所。起動時にパネルを最新の内容に作り直す（payload_hash は前回の内容。変わったときだけ編集する）
   await pool.query(`
     CREATE TABLE IF NOT EXISTS panels (

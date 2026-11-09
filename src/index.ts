@@ -71,6 +71,7 @@ import { handleVoiceStateUpdate } from './voiceJoinNotice.js';
 import * as voiceStatus from './voiceStatus.js';
 import { WELCOME_RESULT_LABELS, sendWelcome } from './welcome.js';
 import * as housing from './housing.js';
+import * as maintenance from './maintenance.js';
 import * as submarines from './submarines.js';
 import * as tempVoice from './tempVoice.js';
 import { startBoostCache } from './xpBoost.js';
@@ -179,6 +180,8 @@ client.once(Events.ClientReady, async (readyClient) => {
   submarines.startSubmarineNotices(readyClient);
   // ハウジング抽選の受付・締め切り前・結果発表を「通知」チャンネルに流す（結果発表は、申し込みメモの人にDMも）
   housing.startHousingNotices(readyClient);
+  // FF14公式のメンテナンス・障害のお知らせを、5分ごとに読んで「通知」チャンネルに流す
+  maintenance.startMaintenanceNotices(readyClient);
 });
 
 const LOG_RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -228,6 +231,10 @@ const prepareGuild = async (guild: Guild): Promise<void> => {
     reportError(`「${guild.name}」に「${housing.HOUSING_ROLE_NAME}」ロールを作れませんでした`, error, guild);
     return null;
   });
+  const maintenanceRole = await maintenance.ensureMaintenanceRole(guild).catch((error: unknown) => {
+    reportError(`「${guild.name}」に「${maintenance.MAINTENANCE_ROLE_NAME}」ロールを作れませんでした`, error, guild);
+    return null;
+  });
   const titleRoles = await ensureTitleRoles(guild).catch((error: unknown): string[] => {
     reportError(`「${guild.name}」に称号のロールを作れませんでした`, error, guild);
     return [];
@@ -258,6 +265,13 @@ const prepareGuild = async (guild: Guild): Promise<void> => {
       guild,
       'system',
       `「${housing.HOUSING_ROLE_NAME}」ロールがなかったので作成しました。設定パネルの「ハウジング抽選」で本人が付け外しでき、抽選のお知らせでメンションされます`,
+    );
+  }
+  if (maintenanceRole) {
+    await sendLog(
+      guild,
+      'system',
+      `「${maintenance.MAINTENANCE_ROLE_NAME}」ロールがなかったので作成しました。設定パネルの「メンテ情報」で本人が付け外しでき、FF14公式のメンテナンス・障害のお知らせでメンションされます`,
     );
   }
   if (titleRoles.length > 0) {
@@ -355,6 +369,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await housing.handleButton(interaction);
     } else if (interaction.isModalSubmit() && interaction.customId.startsWith(housing.CUSTOM_ID_PREFIX)) {
       await housing.handleModalSubmit(interaction);
+    } else if (interaction.isButton() && interaction.customId.startsWith(maintenance.CUSTOM_ID_PREFIX)) {
+      await maintenance.handleButton(interaction);
     } else if (interaction.isButton() && interaction.customId.startsWith(tempVoice.CUSTOM_ID_PREFIX)) {
       await tempVoice.handleButton(interaction);
     } else if (interaction.isModalSubmit() && interaction.customId.startsWith(tempVoice.CUSTOM_ID_PREFIX)) {

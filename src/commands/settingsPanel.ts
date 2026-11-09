@@ -38,6 +38,7 @@ import {
 } from '../memberSettings.js';
 import { boldName } from '../names.js';
 import { OPEN_BUTTON_ID as HOUSING_OPEN_BUTTON_ID } from '../housing.js';
+import { MAINTENANCE_ROLE_NAME, OPEN_BUTTON_ID as MAINTENANCE_OPEN_BUTTON_ID } from '../maintenance.js';
 import { OPEN_BUTTON_ID as SUBMARINE_OPEN_BUTTON_ID } from '../submarines.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import {
@@ -223,6 +224,9 @@ export const buildPanel = (): PanelPayload => {
         '',
         '**🏠 ハウジング抽選**',
         '抽選の受付の始まり・締め切り前・結果発表を「通知」チャンネルでお知らせします（「ハウジング抽選」ロールの人にメンション）。申し込んだ区画をメモしておくと、結果発表のときにDMでもお知らせします。',
+        '',
+        '**🛠️ メンテ情報**',
+        `FF14公式のメンテナンス・障害の情報を「${NOTICE_CHANNEL_NAME}」チャンネルでお知らせします（全ワールド・日本データセンターのものは「${MAINTENANCE_ROLE_NAME}」ロールの人にメンション）。最近のお知らせもここで見られます。`,
       ].join('\n'),
     )
     .setColor(0x5865f2);
@@ -236,9 +240,10 @@ export const buildPanel = (): PanelPayload => {
   // 1行に5つまでなので、2行目に置く
   const secondRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(FRIENDS_MENU_ID).setLabel('フレンド候補').setEmoji({ name: '🤝' }).setStyle(ButtonStyle.Primary),
-    // 押されたときは潜水艦（submarines.ts）・ハウジング抽選（housing.ts）の画面が受け取る
+    // 押されたときは潜水艦（submarines.ts）・ハウジング抽選（housing.ts）・メンテ情報（maintenance.ts）の画面が受け取る
     new ButtonBuilder().setCustomId(SUBMARINE_OPEN_BUTTON_ID).setLabel('潜水艦').setEmoji({ name: '🚢' }).setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(HOUSING_OPEN_BUTTON_ID).setLabel('ハウジング抽選').setEmoji({ name: '🏠' }).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(MAINTENANCE_OPEN_BUTTON_ID).setLabel('メンテ情報').setEmoji({ name: '🛠️' }).setStyle(ButtonStyle.Primary),
   );
   return { embeds: [embed], components: [row, secondRow] };
 };
