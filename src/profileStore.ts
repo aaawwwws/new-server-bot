@@ -26,6 +26,7 @@ interface ProfileColumns {
   character_name: string;
   comment: string;
   recent: string;
+  x_handle: string;
   data_center: string | null;
   world: string | null;
   start_hour: number | null;
@@ -44,12 +45,13 @@ interface ApplicationRow extends ProfileColumns {
   user_id: string;
 }
 
-const PROFILE_COLUMNS = 'character_name, comment, recent, data_center, world, start_hour, end_hour, jobs';
+const PROFILE_COLUMNS = 'character_name, comment, recent, x_handle, data_center, world, start_hour, end_hour, jobs';
 
 const toProfile = (row: ProfileColumns): Profile => ({
   name: row.character_name,
   comment: row.comment,
   recent: row.recent,
+  x: row.x_handle,
   dataCenter: row.data_center,
   world: row.world,
   startHour: row.start_hour,
@@ -126,14 +128,15 @@ export interface SaveProfileParams {
 export const saveProfile = async ({ guildId, userId, profile, progress, channelId, messageId }: SaveProfileParams) => {
   await pool.query(
     `INSERT INTO profiles (
-       guild_id, user_id, character_name, comment, recent, progress, data_center, world,
+       guild_id, user_id, character_name, comment, recent, x_handle, progress, data_center, world,
        start_hour, end_hour, jobs, channel_id, message_id
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      ON CONFLICT (guild_id, user_id) DO UPDATE SET
        character_name = EXCLUDED.character_name,
        comment        = EXCLUDED.comment,
        recent         = EXCLUDED.recent,
+       x_handle       = EXCLUDED.x_handle,
        progress       = EXCLUDED.progress,
        data_center    = EXCLUDED.data_center,
        world          = EXCLUDED.world,
@@ -150,6 +153,7 @@ export const saveProfile = async ({ guildId, userId, profile, progress, channelI
       profile.name,
       profile.comment,
       profile.recent,
+      profile.x,
       progress,
       profile.dataCenter,
       profile.world,
@@ -183,7 +187,7 @@ export const createApplication = async (
     );
     const created = await client.query<{ id: string }>(
       `INSERT INTO profile_applications (guild_id, user_id, ${PROFILE_COLUMNS})
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING id`,
       [
         guildId,
@@ -191,6 +195,7 @@ export const createApplication = async (
         profile.name,
         profile.comment,
         profile.recent,
+        profile.x,
         profile.dataCenter,
         profile.world,
         profile.startHour,

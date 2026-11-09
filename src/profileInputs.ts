@@ -24,8 +24,11 @@ export const FIRST_NAME_INPUT_ID = 'firstName';
 export const LAST_NAME_INPUT_ID = 'lastName';
 export const COMMENT_INPUT_ID = 'comment';
 export const RECENT_INPUT_ID = 'recent';
+export const X_INPUT_ID = 'xHandle';
 /** 最近やっていることの長さ */
 const MAX_RECENT_LENGTH = 200;
+/** Xの入力欄の長さ（プロフィールのURLをそのまま貼れるように、ユーザー名より長くしておく） */
+const MAX_X_INPUT_LENGTH = 100;
 /** 活動時間の「指定しない」 */
 export const NO_TIME = 'none';
 export const START_HOURS = Array.from({ length: 24 }, (_, i) => i);
@@ -82,6 +85,24 @@ export const recentLabel = (value: string, description = 'FF14以外のゲーム
     .setRequired(false);
   if (value) input.setValue(value);
   return new LabelBuilder().setLabel('最近やっているゲーム・コンテンツ（任意）').setDescription(description).setTextInputComponent(input);
+};
+
+/** 入力欄に入れておく、今のXのアカウント（ユーザー名に @ を付ける。なければ空） */
+export const xInputValue = (handle: string): string => (handle ? `@${handle}` : '');
+
+/** X（旧Twitter）のアカウントの入力欄（任意）。value は入れておく文字（「入力し直す」なら入力されたまま） */
+export const xLabel = (value: string): LabelBuilder => {
+  const input = new TextInputBuilder()
+    .setCustomId(X_INPUT_ID)
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder('例: @taro_ff14')
+    .setMaxLength(MAX_X_INPUT_LENGTH)
+    .setRequired(false);
+  if (value) input.setValue(value.slice(0, MAX_X_INPUT_LENGTH));
+  return new LabelBuilder()
+    .setLabel('X（旧Twitter）のID（任意）')
+    .setDescription('プロフィールにリンクで載り、サーバーの人が見られます。URLを貼ってもOK・空欄で消す')
+    .setTextInputComponent(input);
 };
 
 /** コンテンツロールのボタン。付いているロールは青く表示する */

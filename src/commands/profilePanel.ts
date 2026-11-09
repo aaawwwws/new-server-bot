@@ -24,7 +24,7 @@ import { canBotPost } from '../guildUtils.js';
 import { createLock } from '../locks.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import { adminRoleWarnings, ensureAdmin } from '../permissions.js';
-import { RECENT_LABEL, buildProfileEmbed, parseProfile, profileLogFields, type Profile } from '../profile.js';
+import { RECENT_LABEL, X_LABEL, buildProfileEmbed, normalizeXHandle, parseProfile, profileLogFields, type Profile } from '../profile.js';
 import {
   COMMENT_INPUT_ID,
   END_HOURS,
@@ -33,6 +33,7 @@ import {
   LAST_NAME_INPUT_ID,
   RECENT_INPUT_ID,
   START_HOURS,
+  X_INPUT_ID,
   dataCenterRows,
   hourSelect,
   jobRows,
@@ -43,6 +44,8 @@ import {
   toRow,
   vcNoticeButtons,
   worldRows,
+  xInputValue,
+  xLabel,
   type NameAndCommentInput,
   type Row,
 } from '../profileInputs.js';
@@ -93,6 +96,8 @@ interface WizardContext {
 }
 interface ModalInput extends NameAndCommentInput {
   recent: string;
+  /** 入力されたままのXのアカウント（管理者の登録の画面には欄がないので空） */
+  x: string;
   /** 管理者の登録で選ばれたメンバー */
   targetId?: string;
 }
@@ -364,23 +369,27 @@ export const handleModalSubmit = async (interaction: ModalSubmitInteraction<'cac
     lastName: interaction.fields.getTextInputValue(LAST_NAME_INPUT_ID),
     comment: interaction.fields.getTextInputValue(COMMENT_INPUT_ID).trim(),
     recent: interaction.fields.getTextInputValue(RECENT_INPUT_ID).trim(),
+    // 管理者の登録の画面は入力欄が上限（5つ）なので、Xの欄がない
+    x: byAdmin ? '' : interaction.fields.getTextInputValue(X_INPUT_ID).trim(),
     targetId: target?.id,
   };
   // 文字数はモーダル側で制限できるが、使える文字と合計文字数はここで確認する
   const characterName = checkCharacterName(input.firstName, input.lastName);
+  const xHandle = normalizeXHandle(input.x);
   const problems = [
     ...(target ? [] : ['メンバーを選んでください（サーバーにいるメンバーだけ登録できます）。']),
     ...(target?.user.bot ? ['Botは登録できません。'] : []),
     ...(characterName.ok ? [] : characterName.errors),
+    ...(xHandle === null ? [`${X_LABEL}のIDは、英数字と _ の15文字まで（@taro_ff14 のような形か、プロフィールのURL）で入力してください。`] : []),
   ];
-  if (!target || !characterName.ok || problems.length > 0) {
+  if (!target || !characterName.ok || xHandle === null || problems.length > 0) {
     rejectedInputs.set(rejectKey(interaction.user.id, byAdmin), input);
     const retry = new ButtonBuilder()
       .setCustomId(byAdmin ? ADMIN_RETRY_BUTTON_ID : RETRY_BUTTON_ID)
       .setLabel('入力し直す')
       .setStyle(ButtonStyle.Primary);
     await interaction.editReply({
-      content: [byAdmin ? '入力内容を確認してください。' : 'キャラクター名を確認してください。', ...problems.map((p) => `・${p}`)].join('\n'),
+      content: ['入力内容を確認してください。', ...problems.map((p) => `・${p}`)].join('\n'),
       components: [toRow(retry)],
     });
     return;
@@ -397,6 +406,8 @@ export const handleModalSubmit = async (interaction: ModalSubmitInteraction<'cac
     // 管理者の登録は今の内容が入っていない状態から入力するので、空欄なら今のひとこと・最近やっていることを残す
     comment: input.comment || (byAdmin ? (current?.comment ?? '') : ''),
     recent: input.recent || (byAdmin ? (current?.recent ?? '') : ''),
+    // 管理者の登録では変えない（本人が設定パネルで入れる）
+    x: byAdmin ? (current?.x ?? '') : xHandle,
   };
   const ctx: WizardContext = { target, byAdmin, autoApprove: !byAdmin && (await loadAutoApprove(interaction.guild.id)) };
   drafts.set(draftKey(interaction.user.id, target.id), profile);
@@ -468,12 +479,13 @@ const openModal = async (interaction: ComponentInteraction): Promise<void> => {
     lastName: currentLastName,
     comment: current?.comment ?? '',
     recent: current?.recent ?? '',
+    x: xInputValue(current?.x ?? ''),
   };
 
   const modal = new ModalBuilder()
     .setCustomId(MODAL_ID)
     .setTitle(current ? 'プロフィールを編集' : 'プロフィールを作成')
-    .addLabelComponents(...nameAndCommentLabels(input), recentLabel(input.recent));
+    .addLabelComponents(...nameAndCommentLabels(input), recentLabel(input.recent), xLabel(input.x));
   await interaction.showModal(modal);
 };
 

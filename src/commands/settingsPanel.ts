@@ -40,7 +40,17 @@ import { boldName } from '../names.js';
 import { OPEN_BUTTON_ID as HOUSING_OPEN_BUTTON_ID } from '../housing.js';
 import { OPEN_BUTTON_ID as SUBMARINE_OPEN_BUTTON_ID } from '../submarines.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
-import { RECENT_LABEL, buildProfileEmbed, describeJobs, describeTime, describeWorld, type Profile } from '../profile.js';
+import {
+  RECENT_LABEL,
+  X_LABEL,
+  buildProfileEmbed,
+  describeJobs,
+  describeTime,
+  describeWorld,
+  describeX,
+  normalizeXHandle,
+  type Profile,
+} from '../profile.js';
 import {
   COMMENT_INPUT_ID,
   END_HOURS,
@@ -48,6 +58,9 @@ import {
   LAST_NAME_INPUT_ID,
   RECENT_INPUT_ID,
   START_HOURS,
+  X_INPUT_ID,
+  xInputValue,
+  xLabel,
   dataCenterRows,
   hourSelect,
   jobRows,
@@ -81,6 +94,7 @@ import { buildLevelView } from './level.js';
 export const CUSTOM_ID_PREFIX = 'settings:';
 const NAME_MODAL_ID = `${CUSTOM_ID_PREFIX}name-submit`;
 const RECENT_MODAL_ID = `${CUSTOM_ID_PREFIX}recent-submit`;
+const X_MODAL_ID = `${CUSTOM_ID_PREFIX}x-submit`;
 /** ログに載せるひとことの長さ */
 const MAX_COMMENT_IN_LOG = 100;
 
@@ -93,6 +107,7 @@ const PROFILE_ITEMS = [
   { key: 'jobs', label: 'ジョブ', emoji: '⚔️' },
   { key: 'content', label: 'コンテンツ', emoji: '🎮' },
   { key: 'recent', label: RECENT_LABEL, emoji: '🕹️' },
+  { key: 'x', label: X_LABEL, emoji: '🐦' },
 ] as const;
 const MENU_BUTTONS_PER_ROW = 4;
 const PROFILE_MENU_ID = `${CUSTOM_ID_PREFIX}menu:profile`;
@@ -376,8 +391,30 @@ export const handleComponent = async (interaction: ComponentInteraction): Promis
   }
 };
 
-/** 名前・ひとこと、最近やっていることのモーダルの送信 */
+/** 名前・ひとこと、最近やっていること、Xのモーダルの送信 */
 export const handleModalSubmit = async (interaction: ModalSubmitInteraction<'cached'>): Promise<void> => {
+  if (interaction.customId === X_MODAL_ID) {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const raw = interaction.fields.getTextInputValue(X_INPUT_ID).trim();
+    const handle = normalizeXHandle(raw);
+    if (handle === null) {
+      const retry = new ButtonBuilder().setCustomId(customId('open', 'x')).setLabel('入力し直す').setStyle(ButtonStyle.Primary);
+      await interaction.editReply({
+        content: `${X_LABEL}のIDは、英数字と _ の15文字まで（@taro_ff14 のような形か、プロフィールのURL）で入力してください。\n入力された内容: ${raw.slice(0, 100)}`,
+        components: [toRow(retry)],
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
+    await saveChange(
+      interaction,
+      (profile) => {
+        profile.x = handle;
+      },
+      (before, after) => changeLine(X_LABEL, describeX(before.x), describeX(after.x)),
+    );
+    return;
+  }
   if (interaction.customId === RECENT_MODAL_ID) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const recent = interaction.fields.getTextInputValue(RECENT_INPUT_ID).trim();
@@ -483,6 +520,11 @@ const openItem = async (interaction: ComponentInteraction, item: string | undefi
     case 'recent':
       await interaction.showModal(
         new ModalBuilder().setCustomId(RECENT_MODAL_ID).setTitle(`${RECENT_LABEL}を変更`).addLabelComponents(recentLabel(current.recent)),
+      );
+      return;
+    case 'x':
+      await interaction.showModal(
+        new ModalBuilder().setCustomId(X_MODAL_ID).setTitle(`${X_LABEL}のIDを変更`).addLabelComponents(xLabel(xInputValue(current.x))),
       );
       return;
   }

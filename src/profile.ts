@@ -1,4 +1,4 @@
-import { EmbedBuilder, type APIEmbedField, type Embed, type GuildMember, type Role } from 'discord.js';
+import { EmbedBuilder, escapeMarkdown, type APIEmbedField, type Embed, type GuildMember, type Role } from 'discord.js';
 import { memberContentNames } from './contentRoles.js';
 import { findInviteMeRole } from './inviteMeRole.js';
 import { DATA_CENTERS } from './dataCenters.js';
@@ -11,6 +11,8 @@ export interface Profile {
   comment: string;
   /** 最近やっているゲーム・コンテンツ（自由入力・任意） */
   recent: string;
+  /** X（旧Twitter）のユーザー名（@ なし・任意。なければ空） */
+  x: string;
   dataCenter: string | null;
   world: string | null;
   startHour: number | null;
@@ -26,6 +28,10 @@ const JOB_FIELD = '⚔️ ジョブ';
 const CONTENT_FIELD = '🎮 よく遊ぶ';
 export const RECENT_LABEL = '最近やっていること';
 const RECENT_FIELD = `🕹️ ${RECENT_LABEL}`;
+export const X_LABEL = 'X';
+const X_FIELD = `🐦 ${X_LABEL}`;
+/** Xのユーザー名に使える文字と長さ（英数字と _ で15文字まで） */
+const X_HANDLE = '[A-Za-z0-9_]{1,15}';
 const UNSET = '未設定';
 const JOB_SEPARATOR = '・';
 const COMMENT_QUOTE = '>>> ';
@@ -61,6 +67,7 @@ export const buildProfileEmbed = (member: GuildMember, profile: Profile): EmbedB
       { name: CONTENT_FIELD, value: memberContentNames(member).join(JOB_SEPARATOR) || UNSET },
       // 任意なので、書いた人だけ出す
       ...(profile.recent ? [{ name: RECENT_FIELD, value: profile.recent }] : []),
+      ...(profile.x ? [{ name: X_FIELD, value: xLink(profile.x) }] : []),
       // 「いつでも誘って下さい」ロールを付けている人だけ（ひとことの欄は申請内容の読み取りに使うので、別の欄にする）
       ...(hasInviteMe(member) ? [{ name: INVITE_ME_FIELD, value: 'いつでも誘ってください！' }] : []),
     )
@@ -79,6 +86,25 @@ export const describeWorld = (profile: Profile): string =>
 
 export const describeTime = (profile: Profile): string => formatTime(profile.startHour, profile.endHour) ?? UNSET;
 
+/**
+ * 入力されたXのアカウントを、ユーザー名（@ なし）にする。「@taro」「taro」「https://x.com/taro」（twitter.com も）のどれでもよい。
+ * 空なら ''（載せない）。ユーザー名として読めなければ null
+ */
+export const normalizeXHandle = (text: string): string | null => {
+  const value = text.normalize('NFKC').trim();
+  if (!value) return '';
+  const match =
+    value.match(new RegExp(`^(?:https?://)?(?:(?:www|mobile)\\.)?(?:x|twitter)\\.com/@?(${X_HANDLE})/?(?:[?#].*)?$`, 'i')) ??
+    value.match(new RegExp(`^@?(${X_HANDLE})$`));
+  return match?.[1] ?? null;
+};
+
+/** プロフィールに出す、Xのページへのリンク（ユーザー名の _ で斜体にならないようにする） */
+const xLink = (handle: string): string => `[@${escapeMarkdown(handle)}](https://x.com/${handle})`;
+
+/** ログや変更の表示に出す、Xのユーザー名 */
+export const describeX = (handle: string): string => (handle ? `@${handle}` : '（なし）');
+
 export const describeJobs = (profile: Profile): string =>
   JOBS.filter((job) => profile.jobs.includes(job.key))
     .map((job) => job.name)
@@ -92,6 +118,7 @@ export const profileLogFields = (profile: Profile): APIEmbedField[] => [
   { name: JOB_FIELD, value: describeJobs(profile), inline: true },
   ...(profile.comment ? [{ name: '💬 ひとこと', value: profile.comment }] : []),
   ...(profile.recent ? [{ name: RECENT_FIELD, value: profile.recent }] : []),
+  ...(profile.x ? [{ name: X_FIELD, value: describeX(profile.x), inline: true }] : []),
 ];
 
 /** プロフィール未登録の人がVCに入ったときのお知らせ */
@@ -126,6 +153,8 @@ export const parseProfile = (embed: Embed | undefined): Profile => {
     name: embed?.title ?? '',
     comment: embed?.description?.replace(COMMENT_QUOTE, '') ?? '',
     recent: field(RECENT_LABEL),
+    // 表示はリンクなので、URLの方からユーザー名を読む
+    x: field(X_FIELD).match(new RegExp(`x\\.com/(${X_HANDLE})`))?.[1] ?? '',
     world: dataCenter?.worlds.find((world) => worldWords.includes(world)) ?? null,
     dataCenter: dataCenter?.name ?? null,
     startHour: time?.[1] ? Number(time[1]) : null,
