@@ -1,3 +1,4 @@
+import { FONT_FAMILIES, fit, loadAvatar, loadCanvas, readableColor, roundRect, toCss, type Context, type LoadedImage } from './canvas.js';
 import { formatNumber } from './levels.js';
 
 // レベルの画像カード（アイコン・名前・順位・レベル・次のレベルまでのゲージ）。
@@ -8,9 +9,6 @@ const HEIGHT = 300;
 const PADDING = 56;
 const AVATAR_SIZE = 200;
 const TEXT_LEFT = PADDING + AVATAR_SIZE + 44;
-/** 日本語と絵文字も描けるよう、入っていそうなフォントを順に並べる（Docker では Noto、Windows では游ゴシック・Segoe） */
-const FONT_FAMILIES = '"Noto Sans CJK JP", "Noto Sans JP", "Yu Gothic", "Meiryo", "Noto Color Emoji", "Segoe UI Emoji", sans-serif';
-const AVATAR_TIMEOUT_MS = 3_000;
 const NAME_FONT_SIZE = 44;
 const MIN_NAME_FONT_SIZE = 30;
 /** 名前に色が付いていない人の色 */
@@ -34,16 +32,6 @@ export interface RankCardData {
   stats: string[];
 }
 
-type CanvasModule = typeof import('@napi-rs/canvas');
-type Context = ReturnType<ReturnType<CanvasModule['createCanvas']>['getContext']>;
-
-let canvasModule: Promise<CanvasModule | null> | undefined;
-const loadCanvas = (): Promise<CanvasModule | null> =>
-  (canvasModule ??= import('@napi-rs/canvas').catch((error: unknown) => {
-    console.error('画像カード用のライブラリを読み込めませんでした（文字だけで表示します）:', error);
-    return null;
-  }));
-
 export const renderRankCard = async (data: RankCardData): Promise<Buffer | null> => {
   const canvas = await loadCanvas();
   if (!canvas) return null;
@@ -58,18 +46,8 @@ export const renderRankCard = async (data: RankCardData): Promise<Buffer | null>
   }
 };
 
-/** アイコンを読み込む。読めなければ null（頭文字の丸で代わりにする） */
-const loadAvatar = async (canvas: CanvasModule, url: string) => {
-  try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(AVATAR_TIMEOUT_MS) });
-    if (!response.ok) return null;
-    return await canvas.loadImage(Buffer.from(await response.arrayBuffer()));
-  } catch {
-    return null;
-  }
-};
-
-const draw = (ctx: Context, data: RankCardData, avatar: Awaited<ReturnType<typeof loadAvatar>>): void => {
+/** avatar が null なら、頭文字の丸で代わりにする */
+const draw = (ctx: Context, data: RankCardData, avatar: LoadedImage | null): void => {
   const accent = toCss(readableColor(data.color || DEFAULT_COLOR));
 
   // 背景（角を丸めた暗い板と、右上に名前の色の大きな丸）
@@ -171,27 +149,3 @@ const draw = (ctx: Context, data: RankCardData, avatar: Awaited<ReturnType<typeo
   ctx.fillStyle = '#9da3b0';
   ctx.fillText(fit(ctx, data.stats.join(' ・ '), barWidth), TEXT_LEFT, 262);
 };
-
-/** 幅に収まらなければ、後ろを「…」にする */
-const fit = (ctx: Context, text: string, maxWidth: number): string => {
-  if (ctx.measureText(text).width <= maxWidth) return text;
-  const chars = [...text];
-  while (chars.length > 1 && ctx.measureText(`${chars.join('')}…`).width > maxWidth) chars.pop();
-  return `${chars.join('')}…`;
-};
-
-const roundRect = (ctx: Context, x: number, y: number, width: number, height: number, radius: number): void => {
-  ctx.beginPath();
-  ctx.roundRect(x, y, width, height, radius);
-};
-
-/** 暗い背景で読みにくい暗い色は、白を混ぜて明るくする */
-const readableColor = (color: number): number => {
-  const channels = [(color >> 16) & 0xff, (color >> 8) & 0xff, color & 0xff];
-  const luminance = (0.2126 * (channels[0] ?? 0) + 0.7152 * (channels[1] ?? 0) + 0.0722 * (channels[2] ?? 0)) / 255;
-  if (luminance >= 0.35) return color;
-  const [r = 0, g = 0, b = 0] = channels.map((c) => Math.round(c + (255 - c) * 0.45));
-  return (r << 16) | (g << 8) | b;
-};
-
-const toCss = (color: number): string => `#${color.toString(16).padStart(6, '0')}`;

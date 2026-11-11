@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  AttachmentBuilder,
   DiscordAPIError,
   EmbedBuilder,
   MessageFlags,
@@ -16,10 +17,11 @@ import { reportError } from './errorReporter.js';
 import { fetchAllMembers } from './guildUtils.js';
 import { addDays, addMonths, formatDay, formatMonth, jstDay, monthStart, weekStart } from './jst.js';
 import { boldName } from './names.js';
-import { computeRanking, rankXpBetween, rankingLine, type RankingEntry } from './rankings.js';
+import { renderPodium, type PodiumEntry, type PodiumTheme } from './rankingImage.js';
+import { computeRanking, formatScore, rankXpBetween, rankingLine, type RankingEntry } from './rankings.js';
 import { hasResults, recordResults, type ResultPeriod } from './rankingStore.js';
 import { boardButtons } from './rankingView.js';
-import { describeBoost } from './xpBoost.js';
+import { activeBoost, describeBoost, formatPercent } from './xpBoost.js';
 
 // 経験値ランキングの掲示板（今日・今週・今月を自動で更新）と、毎週月曜0時・毎月1日0時の結果の投稿。
 // 結果（上位の人）は、掲示板がなくても歴代記録として残す
@@ -31,6 +33,9 @@ export const MONTHLY_TOP_ROLE_NAME = '月間MVP';
 /** 先月の何位までにロールを付けるか */
 export const MONTHLY_ROLE_COUNT = 1;
 const TOP_COUNT = 10;
+/** 表彰台の画像に出す人数（ここから下は文字で出す） */
+const PODIUM_COUNT = 3;
+const PODIUM_FILE_NAME = 'ranking.png';
 /** 歴代記録として残す人数 */
 const RESULT_COUNT = 10;
 const BOARD_REFRESH_MS = 5 * 60_000;
@@ -44,6 +49,9 @@ const RESULT_TYPES = {
     roleCount: WEEKLY_ROLE_COUNT,
     roleColor: COLOR,
     title: '🏆 先週の経験値ランキング',
+    /** 表彰台の画像の見出しと色 */
+    imageTitle: '先週の経験値ランキング',
+    theme: 'gold',
     end: (start: string) => addDays(start, 7),
     describe: (start: string) => `${formatDay(start)}〜${formatDay(addDays(start, 6))}`,
     name: '先週',
@@ -53,11 +61,13 @@ const RESULT_TYPES = {
     roleCount: MONTHLY_ROLE_COUNT,
     roleColor: 0xe67e22,
     title: '🌟 先月の経験値ランキング',
+    imageTitle: '先月の経験値ランキング',
+    theme: 'purple',
     end: (start: string) => addMonths(start, 1),
     describe: (start: string) => formatMonth(start),
     name: '先月',
   },
-} as const satisfies Record<ResultPeriod, unknown>;
+} as const satisfies Record<ResultPeriod, { theme: PodiumTheme } & Record<string, unknown>>;
 
 export interface RankingBoard {
   guildId: string;
@@ -116,8 +126,44 @@ const deleteBoard = async (guildId: string): Promise<void> => {
 const rankingLines = (entries: RankingEntry[], period: 'day' | 'week' | 'month', count: number, empty: string): string =>
   entries.length === 0 ? empty : entries.slice(0, count).map((entry, i) => rankingLine({ kind: 'xp', period }, entry, i)).join('\n');
 
-/** 掲示板の中身。日付が変われば「今日」、月曜になれば「今週」、1日になれば「今月」が自動で切り替わる */
-export const buildBoard = async (guild: Guild, now: Date = new Date()): Promise<EmbedBuilder> => {
+/** 表彰台に出す、昨日からの変化（上がったら ▲2、下がったら ▼1、昨日はいなかった人は NEW） */
+const podiumChange = (change: RankingEntry['change']): string | null => {
+  if (change === null || change === 0) return null;
+  if (change === 'new') return 'NEW';
+  return change > 0 ? `▲${change}` : `▼${-change}`;
+};
+
+/** 表彰台の画像に出す上位の人 */
+const podiumEntries = (entries: RankingEntry[], period: 'day' | 'week' | 'month'): PodiumEntry[] =>
+  entries.slice(0, PODIUM_COUNT).map((entry) => ({
+    name: entry.member.displayName,
+    avatarUrl: entry.member.displayAvatarURL({ extension: 'png', size: 256, forceStatic: true }),
+    value: formatScore('xp', period, entry),
+    change: podiumChange(entry.change),
+  }));
+
+/** 表彰台の画像と、それを使う埋め込みの組 */
+const podiumFile = (image: Buffer): AttachmentBuilder => new AttachmentBuilder(image, { name: PODIUM_FILE_NAME });
+
+interface BoardData {
+  today: string;
+  thisWeek: string;
+  thisMonth: string;
+  lastWeek: string;
+  lastMonth: string;
+  daily: RankingEntry[];
+  weekly: RankingEntry[];
+  monthly: RankingEntry[];
+  previousWeek: RankingEntry[];
+  previousMonth: RankingEntry[];
+  /** XPアップの一言（開催中・次の予定） */
+  boost: string | null;
+  /** 画像の右上に出す、開催中のXPアップ */
+  boostBadge: string | null;
+}
+
+/** 掲示板に出すランキング。日付が変われば「今日」、月曜になれば「今週」、1日になれば「今月」が自動で切り替わる */
+const loadBoardData = async (guild: Guild, now: Date): Promise<BoardData> => {
   const today = jstDay(now);
   const thisWeek = weekStart(today);
   const lastWeek = addDays(thisWeek, -7);
@@ -130,36 +176,92 @@ export const buildBoard = async (guild: Guild, now: Date = new Date()): Promise<
     rankXpBetween(guild, lastWeek, thisWeek),
     rankXpBetween(guild, lastMonth, thisMonth),
   ]);
-  const boost = describeBoost(guild.id, now);
-  return new EmbedBuilder()
+  const active = activeBoost(guild.id, now);
+  return {
+    today,
+    thisWeek,
+    thisMonth,
+    lastWeek,
+    lastMonth,
+    daily: daily.entries,
+    weekly: weekly.entries,
+    monthly: monthly.entries,
+    previousWeek,
+    previousMonth,
+    boost: describeBoost(guild.id, now),
+    boostBadge: active ? `XP ${formatPercent(active.percent)} 開催中` : null,
+  };
+};
+
+/** 掲示板の表彰台（今週の上位3人） */
+const boardPodium = (data: BoardData) => ({
+  title: '今週の経験値ランキング',
+  subtitle: `${formatDay(data.thisWeek)}〜 ・ 上位${PODIUM_COUNT}人`,
+  badge: data.boostBadge,
+  theme: 'gold' as const,
+  entries: podiumEntries(data.weekly, 'week'),
+});
+
+/**
+ * 掲示板の埋め込み。1つ目に表彰台の画像（今週の上位3人）、2つ目に文字のランキング。
+ * withImage が false（画像を作れなかった）なら、今週も1位から文字で出す
+ */
+const boardEmbeds = (data: BoardData, withImage: boolean): EmbedBuilder[] => {
+  const header = new EmbedBuilder()
     .setColor(COLOR)
     .setTitle('🏆 経験値ランキング')
     .setDescription(
       [
         '発言とVCで貯まった経験値のランキングです（5分ごとに更新・⬆⬇🆕 は昨日からの変化）。',
         '下のボタンで、自分の順位やほかのランキング（発言数・VC・連続日数・PT募集）を見られます。',
-        ...(boost ? ['', boost] : []),
+        ...(data.boost ? ['', data.boost] : []),
       ].join('\n'),
-    )
+    );
+  if (withImage) header.setImage(`attachment://${PODIUM_FILE_NAME}`);
+  const rest = data.weekly.slice(PODIUM_COUNT, TOP_COUNT);
+  const weekField = withImage
+    ? {
+        name: `🗓️ 今週 ${PODIUM_COUNT + 1}〜${TOP_COUNT}位`,
+        value: rest.length > 0 ? rest.map((entry, i) => rankingLine({ kind: 'xp', period: 'week' }, entry, PODIUM_COUNT + i)).join('\n') : 'まだいません',
+        inline: true,
+      }
+    : { name: `🗓️ 今週 ${formatDay(data.thisWeek)}〜`, value: rankingLines(data.weekly, 'week', TOP_COUNT, 'まだ記録がありません'), inline: true };
+  const lists = new EmbedBuilder()
+    .setColor(COLOR)
     .addFields(
-      { name: `📅 今日 ${formatDay(today)}`, value: rankingLines(daily.entries, 'day', TOP_COUNT, 'まだ記録がありません'), inline: true },
-      { name: `🗓️ 今週 ${formatDay(thisWeek)}〜`, value: rankingLines(weekly.entries, 'week', TOP_COUNT, 'まだ記録がありません'), inline: true },
-      { name: `🌙 今月 ${formatMonth(thisMonth)}`, value: rankingLines(monthly.entries, 'month', TOP_COUNT, 'まだ記録がありません'), inline: true },
+      { name: `📅 今日 ${formatDay(data.today)}`, value: rankingLines(data.daily, 'day', TOP_COUNT, 'まだ記録がありません'), inline: true },
+      weekField,
+      { name: `🌙 今月 ${formatMonth(data.thisMonth)}`, value: rankingLines(data.monthly, 'month', TOP_COUNT, 'まだ記録がありません'), inline: true },
       {
-        name: `👑 先週の上位 ${formatDay(lastWeek)}〜${formatDay(addDays(thisWeek, -1))}`,
-        value: rankingLines(previousWeek, 'week', WEEKLY_ROLE_COUNT, '記録がありません'),
+        name: `👑 先週の上位 ${formatDay(data.lastWeek)}〜${formatDay(addDays(data.thisWeek, -1))}`,
+        value: rankingLines(data.previousWeek, 'week', WEEKLY_ROLE_COUNT, '記録がありません'),
         inline: true,
       },
       {
-        name: `🌟 先月のMVP ${formatMonth(lastMonth)}`,
-        value: rankingLines(previousMonth, 'month', MONTHLY_ROLE_COUNT, '記録がありません'),
+        name: `🌟 先月のMVP ${formatMonth(data.lastMonth)}`,
+        value: rankingLines(data.previousMonth, 'month', MONTHLY_ROLE_COUNT, '記録がありません'),
         inline: true,
       },
     )
     .setFooter({
       text: `毎週月曜0時に先週の結果を投稿して1〜${WEEKLY_ROLE_COUNT}位に「${WEEKLY_TOP_ROLE_NAME}」、毎月1日0時に先月の結果を投稿して1位に「${MONTHLY_TOP_ROLE_NAME}」ロールを付けます`,
     });
+  return [header, lists];
 };
+
+/** 掲示板のメッセージの中身（画像を作れなければ文字だけ） */
+const renderBoard = async (data: BoardData, now: Date): Promise<{ embeds: EmbedBuilder[]; files: AttachmentBuilder[] }> => {
+  const image = await renderPodium(boardPodium(data));
+  const embeds = boardEmbeds(data, image !== null);
+  embeds.at(-1)?.setTimestamp(now);
+  return { embeds, files: image ? [podiumFile(image)] : [] };
+};
+
+/** 中身が変わったかを見るための値。画像を描く前に比べて、変わっていなければ描かない */
+const boardHash = (data: BoardData): string =>
+  createHash('sha256')
+    .update(JSON.stringify({ embeds: boardEmbeds(data, true).map((embed) => embed.toJSON()), podium: boardPodium(data) }))
+    .digest('hex');
 
 /** 前回から中身が変わったときだけ書き換える（掲示板ごとの、前回の中身） */
 const lastBoardHash = new Map<string, string>();
@@ -167,11 +269,13 @@ const lastBoardRefresh = new Map<string, number>();
 
 /** 掲示板を今の内容に書き換える。消されていたら、掲示板はもう使わない（false） */
 export const refreshBoard = async (guild: Guild, channel: GuildTextBasedChannel, board: RankingBoard, now: Date = new Date()): Promise<boolean> => {
-  const embed = await buildBoard(guild, now);
-  const hash = createHash('sha256').update(JSON.stringify(embed.toJSON())).digest('hex');
+  const data = await loadBoardData(guild, now);
+  const hash = boardHash(data);
   if (lastBoardHash.get(board.messageId) === hash) return true;
   try {
-    await channel.messages.edit(board.messageId, { embeds: [embed.setTimestamp(now)], components: [boardButtons()] });
+    const { embeds, files } = await renderBoard(data, now);
+    // 前の画像は外して、新しい画像に差し替える
+    await channel.messages.edit(board.messageId, { embeds, components: [boardButtons()], files, attachments: [] });
     lastBoardHash.set(board.messageId, hash);
     return true;
   } catch (error) {
@@ -187,12 +291,18 @@ const postResult = async (guild: Guild, channel: GuildTextBasedChannel, period: 
   const entries = await rankXpBetween(guild, start, type.end(start));
   const winners = entries.slice(0, type.roleCount).map((entry) => entry.member);
   const roleNote = await giveTopRole(guild, period, winners);
+  // 上位3人の表彰台の画像（作れなければ文字だけ）
+  const image =
+    entries.length > 0
+      ? await renderPodium({ title: type.imageTitle, subtitle: type.describe(start), badge: null, theme: type.theme, entries: podiumEntries(entries, period) })
+      : null;
   const embed = new EmbedBuilder()
     .setColor(COLOR)
     .setTitle(type.title)
     .setDescription([type.describe(start), '', rankingLines(entries, period, TOP_COUNT, `${type.name}は記録がありませんでした。`)].join('\n'))
     .addFields({ name: `🎖️ 「${type.roleName}」ロール`, value: roleNote });
-  await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
+  if (image) embed.setImage(`attachment://${PODIUM_FILE_NAME}`);
+  await channel.send({ embeds: [embed], files: image ? [podiumFile(image)] : [], allowedMentions: { parse: [] } });
   void sendLog(guild, 'system', `${type.name}（${type.describe(start)}）の経験値ランキングを投稿しました`, undefined, {
     channel,
     fields: [{ name: `🎖️ 「${type.roleName}」ロール`, value: roleNote }],
@@ -320,9 +430,10 @@ export const placeBoard = async (guild: Guild, channel: GuildTextBasedChannel, n
     const oldChannel = guild.channels.cache.get(old.channelId);
     if (oldChannel?.isTextBased()) await oldChannel.messages.delete(old.messageId).catch(() => undefined);
   }
-  const embed = await buildBoard(guild, now);
+  const { embeds, files } = await renderBoard(await loadBoardData(guild, now), now);
   const message = await channel.send({
-    embeds: [embed.setTimestamp(now)],
+    embeds,
+    files,
     components: [boardButtons()],
     flags: MessageFlags.SuppressNotifications,
   });
