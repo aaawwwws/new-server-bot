@@ -502,8 +502,13 @@ export const runRankingSchedule = async (client: Client<true>, now: Date = new D
         await repostBoard(guild, channel, board, now);
       } else if (now.getTime() - (lastBoardRefresh.get(guildId) ?? 0) >= BOARD_REFRESH_MS) {
         lastBoardRefresh.set(guildId, now.getTime());
-        // 掲示板が消されていたら、もう更新しない（設置し直せばまた使える）
-        if (!(await refreshBoard(guild, channel, board, now))) await deleteBoard(guildId);
+        if (channel.lastMessageId && channel.lastMessageId !== board.messageId) {
+          // Botが止まっている間の投稿や、取りこぼした発言で掲示板が上に流れていたら、一番下に出し直す（起動して最初の回にも直る）
+          await repostBoard(guild, channel, board, now);
+        } else if (!(await refreshBoard(guild, channel, board, now))) {
+          // 掲示板が消されていたら、もう更新しない（設置し直せばまた使える）
+          await deleteBoard(guildId);
+        }
       }
     });
   }
