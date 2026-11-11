@@ -60,7 +60,7 @@ import {
 } from './inactiveRole.js';
 import { handleAuditLogEntry } from './moderationLog.js';
 import { refreshPanels } from './panelRefresh.js';
-import { startRankingBoards } from './rankingBoard.js';
+import { handleRankingChannelMessage, startRankingBoards } from './rankingBoard.js';
 import * as rankingView from './rankingView.js';
 import { refreshActiveRecruits, startRecruitScheduler } from './recruitMessage.js';
 import { ADMIN_ROLE_NAME, ensureAdmin, ensureAdminRole, interactionLabel, logCommand } from './permissions.js';
@@ -497,6 +497,8 @@ client.on(Events.MessageCreate, (message) => {
   });
   // 一時VCの部屋のチャットなら、静かになってから操作パネルを一番下に置き直す
   tempVoice.handleTempVoiceMessage(message);
+  // ランキング掲示板のチャンネルなら、静かになってから掲示板を一番下に置き直す
+  handleRankingChannelMessage(message);
 });
 
 client.on(Events.MessageDelete, (message) => {

@@ -10,11 +10,13 @@ import {
   type Guild,
   type GuildMember,
   type GuildTextBasedChannel,
+  type Message,
 } from 'discord.js';
 import { sendLog } from './activityLog.js';
 import { pool } from './db.js';
 import { reportError } from './errorReporter.js';
 import { fetchAllMembers } from './guildUtils.js';
+import { createLock } from './locks.js';
 import { addDays, addMonths, formatDay, formatMonth, jstDay, monthStart, weekStart } from './jst.js';
 import { boldName } from './names.js';
 import { renderPodium, type PodiumEntry, type PodiumTheme } from './rankingImage.js';
@@ -97,6 +99,12 @@ const toBoard = (row: BoardRow): RankingBoard => ({
 
 const BOARD_COLUMNS = 'guild_id, channel_id, message_id, last_weekly_post::text AS last_weekly_post, last_monthly_post::text AS last_monthly_post';
 
+/**
+ * 掲示板の場所（サーバーのID → 掲示板）。発言のたびにDBを読まないよう、Botの中でも覚えておく
+ * （掲示板のチャンネルに書かれたら、掲示板を一番下に置き直すため）
+ */
+const knownBoards = new Map<string, RankingBoard>();
+
 export const findBoard = async (guildId: string): Promise<RankingBoard | null> => {
   const { rows } = await pool.query<BoardRow>(`SELECT ${BOARD_COLUMNS} FROM ranking_boards WHERE guild_id = $1`, [guildId]);
   const [row] = rows;
@@ -105,7 +113,10 @@ export const findBoard = async (guildId: string): Promise<RankingBoard | null> =
 
 const listBoards = async (): Promise<RankingBoard[]> => {
   const { rows } = await pool.query<BoardRow>(`SELECT ${BOARD_COLUMNS} FROM ranking_boards`);
-  return rows.map(toBoard);
+  const boards = rows.map(toBoard);
+  knownBoards.clear();
+  for (const board of boards) knownBoards.set(board.guildId, board);
+  return boards;
 };
 
 export const saveBoard = async (board: RankingBoard): Promise<void> => {
@@ -116,11 +127,19 @@ export const saveBoard = async (board: RankingBoard): Promise<void> => {
            last_weekly_post = EXCLUDED.last_weekly_post, last_monthly_post = EXCLUDED.last_monthly_post`,
     [board.guildId, board.channelId, board.messageId, board.lastWeeklyPost, board.lastMonthlyPost],
   );
+  knownBoards.set(board.guildId, { ...board });
 };
 
 const deleteBoard = async (guildId: string): Promise<void> => {
   await pool.query('DELETE FROM ranking_boards WHERE guild_id = $1', [guildId]);
+  knownBoards.delete(guildId);
 };
+
+/**
+ * 掲示板の書き換え・置き直し・設置を、サーバーごとに1つずつ行う
+ * （置き直しで掲示板のメッセージが変わった直後に、前のメッセージを書き換えようとして「消された」と取り違えないように）
+ */
+const boardLock = createLock();
 
 /** 上位 count 人の行（XPの、終わった期間か、今日・今週・今月） */
 const rankingLines = (entries: RankingEntry[], period: 'day' | 'week' | 'month', count: number, empty: string): string =>
@@ -279,10 +298,65 @@ export const refreshBoard = async (guild: Guild, channel: GuildTextBasedChannel,
     lastBoardHash.set(board.messageId, hash);
     return true;
   } catch (error) {
-    if (error instanceof DiscordAPIError && error.code === RESTJSONErrorCodes.UnknownMessage) return false;
+    if (isUnknownMessage(error)) return false;
     reportError(`「${guild.name}」のランキング掲示板を更新できませんでした`, error, guild);
     return true;
   }
+};
+
+const isUnknownMessage = (error: unknown): boolean => error instanceof DiscordAPIError && error.code === RESTJSONErrorCodes.UnknownMessage;
+
+/**
+ * 掲示板をチャンネルの一番下に出し直す（新しいものを出してから前のものを消す。出せなかったときに、掲示板がなくならないように）。
+ * 前の掲示板が消されていたら（管理者が消した）、出し直さずに掲示板をやめる
+ */
+const repostBoard = async (guild: Guild, channel: GuildTextBasedChannel, board: RankingBoard, now: Date): Promise<void> => {
+  const exists = await channel.messages.fetch(board.messageId).then(
+    () => true,
+    (error: unknown) => {
+      if (isUnknownMessage(error)) return false;
+      throw error;
+    },
+  );
+  if (!exists) {
+    await deleteBoard(guild.id);
+    return;
+  }
+  const data = await loadBoardData(guild, now);
+  const { embeds, files } = await renderBoard(data, now);
+  const message = await channel.send({ embeds, files, components: [boardButtons()], flags: MessageFlags.SuppressNotifications });
+  await saveBoard({ ...board, messageId: message.id });
+  lastBoardHash.delete(board.messageId);
+  lastBoardHash.set(message.id, boardHash(data));
+  lastBoardRefresh.set(guild.id, now.getTime());
+  await channel.messages.delete(board.messageId).catch(() => undefined);
+};
+
+/** 掲示板のチャンネルに何か書かれたら、この時間静かになってから掲示板を一番下に置き直す（話している途中で動くと読みにくいので） */
+const BUMP_AFTER_MS = 10_000;
+const bumpTimers = new Map<string, NodeJS.Timeout>();
+
+/** 掲示板のチャンネルの発言（人の発言も、結果の投稿などのBotのメッセージも） */
+export const handleRankingChannelMessage = (message: Message): void => {
+  if (!message.inGuild()) return;
+  const known = knownBoards.get(message.guildId);
+  if (!known || known.channelId !== message.channelId || message.id === known.messageId) return;
+  const { guild } = message;
+  clearTimeout(bumpTimers.get(guild.id));
+  const timer = setTimeout(() => {
+    bumpTimers.delete(guild.id);
+    boardLock(guild.id, async () => {
+      // 待っている間に置き直した・設置し直したかもしれないので、今の掲示板を読み直す
+      const board = await findBoard(guild.id);
+      const channel = board ? guild.channels.cache.get(board.channelId) : undefined;
+      if (!board || !channel?.isTextBased() || channel.lastMessageId === board.messageId) return;
+      await repostBoard(guild, channel, board, new Date());
+    }).catch((error: unknown) => {
+      reportError(`「${guild.name}」のランキング掲示板を一番下に置き直せませんでした`, error, guild);
+    });
+  }, BUMP_AFTER_MS);
+  timer.unref();
+  bumpTimers.set(guild.id, timer);
 };
 
 /** 先週・先月の結果を投稿し、上位の人にロールを付け替える */
@@ -370,6 +444,10 @@ const recordFinishedPeriods = async (guild: Guild, now: Date): Promise<void> => 
 
 /** 1分ごとに、週・月が終わっていれば結果を残して投稿し、5分ごとに掲示板を書き換える */
 export const startRankingBoards = (client: Client<true>): void => {
+  // 掲示板の場所を覚える（最初の1分を待たずに、置き直しが効くように）
+  listBoards().catch((error: unknown) => {
+    reportError('ランキング掲示板を読み込めませんでした', error);
+  });
   setInterval(() => {
     runRankingSchedule(client).catch((error: unknown) => {
       reportError('ランキング掲示板の処理に失敗しました', error);
@@ -387,64 +465,78 @@ export const runRankingSchedule = async (client: Client<true>, now: Date = new D
   const today = jstDay(now);
   const lastWeek = addDays(weekStart(today), -7);
   const lastMonth = addMonths(monthStart(today), -1);
-  for (const board of await listBoards()) {
-    const guild = client.guilds.cache.get(board.guildId);
-    const channel = guild?.channels.cache.get(board.channelId);
+  for (const { guildId } of await listBoards()) {
+    const guild = client.guilds.cache.get(guildId);
     if (!guild) continue;
-    if (!channel?.isTextBased()) {
-      await deleteBoard(board.guildId);
-      continue;
-    }
+    await boardLock(guildId, async () => {
+      // 置き直しで掲示板のメッセージが変わっているかもしれないので、今の掲示板を読み直す
+      const board = await findBoard(guildId);
+      if (!board) return;
+      const channel = guild.channels.cache.get(board.channelId);
+      if (!channel?.isTextBased()) {
+        await deleteBoard(guildId);
+        return;
+      }
 
-    // Botが止まっていて月曜0時・1日0時を過ぎていたら、動き出したときに投稿する。二重に投稿しないよう、先に記録する。
-    // 月の結果の機能より前からある掲示板（記録が空）は、先月の分を投稿済みとして始める
-    let posted = false;
-    if (board.lastWeeklyPost === null || board.lastWeeklyPost < lastWeek) {
-      board.lastWeeklyPost = lastWeek;
-      await saveBoard(board);
-      await postResult(guild, channel, 'week', lastWeek);
-      posted = true;
-    }
-    if (board.lastMonthlyPost === null) {
-      board.lastMonthlyPost = lastMonth;
-      await saveBoard(board);
-    } else if (board.lastMonthlyPost < lastMonth) {
-      board.lastMonthlyPost = lastMonth;
-      await saveBoard(board);
-      await postResult(guild, channel, 'month', lastMonth);
-      posted = true;
-    }
+      // Botが止まっていて月曜0時・1日0時を過ぎていたら、動き出したときに投稿する。二重に投稿しないよう、先に記録する。
+      // 月の結果の機能より前からある掲示板（記録が空）は、先月の分を投稿済みとして始める
+      let posted = false;
+      if (board.lastWeeklyPost === null || board.lastWeeklyPost < lastWeek) {
+        board.lastWeeklyPost = lastWeek;
+        await saveBoard(board);
+        await postResult(guild, channel, 'week', lastWeek);
+        posted = true;
+      }
+      if (board.lastMonthlyPost === null) {
+        board.lastMonthlyPost = lastMonth;
+        await saveBoard(board);
+      } else if (board.lastMonthlyPost < lastMonth) {
+        board.lastMonthlyPost = lastMonth;
+        await saveBoard(board);
+        await postResult(guild, channel, 'month', lastMonth);
+        posted = true;
+      }
 
-    if (posted || now.getTime() - (lastBoardRefresh.get(board.guildId) ?? 0) >= BOARD_REFRESH_MS) {
-      lastBoardRefresh.set(board.guildId, now.getTime());
-      // 掲示板が消されていたら、もう更新しない（設置し直せばまた使える）
-      if (!(await refreshBoard(guild, channel, board, now))) await deleteBoard(board.guildId);
-    }
+      if (posted) {
+        // 結果の投稿で掲示板が上に流れたので、一番下に出し直す（消されていたら、もう使わない）
+        await repostBoard(guild, channel, board, now);
+      } else if (now.getTime() - (lastBoardRefresh.get(guildId) ?? 0) >= BOARD_REFRESH_MS) {
+        lastBoardRefresh.set(guildId, now.getTime());
+        // 掲示板が消されていたら、もう更新しない（設置し直せばまた使える）
+        if (!(await refreshBoard(guild, channel, board, now))) await deleteBoard(guildId);
+      }
+    });
   }
 };
 
 /** 掲示板を新しく置く（前の掲示板があれば消す）。前の週・月の結果は投稿済みとして始める */
 export const placeBoard = async (guild: Guild, channel: GuildTextBasedChannel, now: Date = new Date()): Promise<{ replaced: boolean }> => {
-  const old = await findBoard(guild.id);
-  if (old) {
-    const oldChannel = guild.channels.cache.get(old.channelId);
-    if (oldChannel?.isTextBased()) await oldChannel.messages.delete(old.messageId).catch(() => undefined);
-  }
-  const { embeds, files } = await renderBoard(await loadBoardData(guild, now), now);
-  const message = await channel.send({
-    embeds,
-    files,
-    components: [boardButtons()],
-    flags: MessageFlags.SuppressNotifications,
+  let replaced = false;
+  await boardLock(guild.id, async () => {
+    const old = await findBoard(guild.id);
+    if (old) {
+      const oldChannel = guild.channels.cache.get(old.channelId);
+      if (oldChannel?.isTextBased()) await oldChannel.messages.delete(old.messageId).catch(() => undefined);
+    }
+    const data = await loadBoardData(guild, now);
+    const { embeds, files } = await renderBoard(data, now);
+    const message = await channel.send({
+      embeds,
+      files,
+      components: [boardButtons()],
+      flags: MessageFlags.SuppressNotifications,
+    });
+    const today = jstDay(now);
+    await saveBoard({
+      guildId: guild.id,
+      channelId: channel.id,
+      messageId: message.id,
+      lastWeeklyPost: old?.lastWeeklyPost ?? addDays(weekStart(today), -7),
+      lastMonthlyPost: old?.lastMonthlyPost ?? addMonths(monthStart(today), -1),
+    });
+    lastBoardHash.set(message.id, boardHash(data));
+    lastBoardRefresh.set(guild.id, now.getTime());
+    replaced = old !== null;
   });
-  const today = jstDay(now);
-  await saveBoard({
-    guildId: guild.id,
-    channelId: channel.id,
-    messageId: message.id,
-    lastWeeklyPost: old?.lastWeeklyPost ?? addDays(weekStart(today), -7),
-    lastMonthlyPost: old?.lastMonthlyPost ?? addMonths(monthStart(today), -1),
-  });
-  lastBoardRefresh.set(guild.id, now.getTime());
-  return { replaced: old !== null };
+  return { replaced };
 };
