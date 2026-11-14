@@ -51,8 +51,8 @@ import {
 // customId は「want:<操作>:<値>…」
 
 export const CUSTOM_ID_PREFIX = 'want:';
-/** パネルの「✋ やりたいものを選ぶ」（選ぶ画面の一番上に戻るときも） */
-const PICK_ID = `${CUSTOM_ID_PREFIX}pick`;
+/** パネルの「✋ やりたいものを選ぶ」と、設定パネルの「🎮 やりたいコンテンツ」（選ぶ画面の一番上に戻るときも） */
+export const PICK_ID = `${CUSTOM_ID_PREFIX}pick`;
 /** カテゴリーの選択 */
 const CATEGORY_ID = `${CUSTOM_ID_PREFIX}cat`;
 /** 拡張の選択（want:ex:<カテゴリー>） */
