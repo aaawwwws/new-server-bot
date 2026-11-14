@@ -414,6 +414,37 @@ export const initDatabase = async (): Promise<void> => {
     )
   `);
 
+  // やりたいコンテンツ。ゲームのコンテンツ（src/duties.ts）のほかに、管理者が足す「そのほか」（地図・ギャザクラなど。position は並び順）
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS want_items (
+      id         bigserial   PRIMARY KEY,
+      guild_id   text        NOT NULL,
+      name       text        NOT NULL,
+      emoji      text,
+      position   integer     NOT NULL DEFAULT 0,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (guild_id, name)
+    )
+  `);
+  // メンバーが選んだもの（いくつでも）。item_key は「d<コンテンツファインダーのID>」（ゲームのコンテンツ）か「c<want_items の id>」（そのほか）
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS want_votes (
+      guild_id   text        NOT NULL,
+      user_id    text        NOT NULL,
+      item_key   text        NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (guild_id, user_id, item_key)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS want_panels (
+      message_id text        PRIMARY KEY,
+      guild_id   text        NOT NULL,
+      channel_id text        NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+
   // 設置したパネルの場所。起動時にパネルを最新の内容に作り直す（payload_hash は前回の内容。変わったときだけ編集する）
   await pool.query(`
     CREATE TABLE IF NOT EXISTS panels (

@@ -40,6 +40,7 @@ import * as recruitList from './commands/recruitList.js';
 import * as recruitPanel from './commands/recruitPanel.js';
 import * as settingsPanel from './commands/settingsPanel.js';
 import * as submarine from './commands/submarine.js';
+import * as wantPanel from './commands/wantPanel.js';
 import { closeDatabase, initDatabase } from './db.js';
 import { reportError, setErrorReportClient } from './errorReporter.js';
 import { loadAllGuildSettings } from './guildSettings.js';
@@ -74,6 +75,7 @@ import * as housing from './housing.js';
 import * as maintenance from './maintenance.js';
 import * as submarines from './submarines.js';
 import * as tempVoice from './tempVoice.js';
+import * as wantList from './wantList.js';
 import { startBoostCache } from './xpBoost.js';
 
 const commands = [
@@ -90,6 +92,7 @@ const commands = [
   level,
   ranking,
   submarine,
+  wantPanel,
 ];
 /** 管理者以外も使えるコマンド（ほかはパネルの設置用なので「管理者」ロールの人だけ） */
 const PUBLIC_COMMANDS = new Set([memberSearch.data.name, level.data.name, ranking.data.name, submarine.data.name]);
@@ -182,6 +185,8 @@ client.once(Events.ClientReady, async (readyClient) => {
   housing.startHousingNotices(readyClient);
   // FF14公式のメンテナンス・障害のお知らせを、5分ごとに読んで「通知」チャンネルに流す
   maintenance.startMaintenanceNotices(readyClient);
+  // やりたいコンテンツのパネルを、起動時と1時間ごとに今の人数へ書き換える（抜けた人・非アクティブになった人を反映）
+  wantList.startWantPanels(readyClient);
 });
 
 const LOG_RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -369,6 +374,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await housing.handleButton(interaction);
     } else if (interaction.isModalSubmit() && interaction.customId.startsWith(housing.CUSTOM_ID_PREFIX)) {
       await housing.handleModalSubmit(interaction);
+    } else if ((interaction.isButton() || interaction.isStringSelectMenu()) && interaction.customId.startsWith(wantList.CUSTOM_ID_PREFIX)) {
+      await wantList.handleComponent(interaction);
+    } else if (interaction.isModalSubmit() && interaction.customId.startsWith(wantList.CUSTOM_ID_PREFIX)) {
+      await wantList.handleModalSubmit(interaction);
     } else if (interaction.isButton() && interaction.customId.startsWith(maintenance.CUSTOM_ID_PREFIX)) {
       await maintenance.handleButton(interaction);
     } else if (interaction.isButton() && interaction.customId.startsWith(tempVoice.CUSTOM_ID_PREFIX)) {

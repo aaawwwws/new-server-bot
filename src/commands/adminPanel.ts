@@ -73,6 +73,7 @@ import { ADMIN_BUTTON_ID as HOUSING_ADMIN_BUTTON_ID } from '../housing.js';
 import { INACTIVE_ROLE_NAME } from '../inactiveRole.js';
 import { addDays, formatShortDateTime, jstDay } from '../jst.js';
 import { ADMIN_BUTTON_ID as TEMP_VOICE_ADMIN_BUTTON_ID } from '../tempVoice.js';
+import { ADMIN_BUTTON_ID as WANT_ADMIN_BUTTON_ID } from '../wantList.js';
 import { nameById, nameWithUsername } from '../names.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import { profileLogFields } from '../profile.js';
@@ -196,6 +197,9 @@ export const buildPanel = (): PanelPayload => {
         '**XPアップ**: 期間を決めて、発言とVCでもらえるXPを1.5〜3倍にします（予約もできます）',
         '**XPの調整**: メンバーのXPを足す・引く（理由はログに残ります）',
         '**XPなしチャンネル**: 発言・リアクション・VCをXPにしないチャンネルを選びます',
+        '',
+        '__**🎮 そのほか**__',
+        '**やりたいコンテンツ**: ゲームにないもの（地図・ギャザクラなど）を「そのほか」として足し引きします。全員の選択のリセットも（パネルは `/やりたいコンテンツパネル`）',
       ].join('\n'),
     )
     .setColor(0x99aab5);
@@ -225,7 +229,11 @@ export const buildPanel = (): PanelPayload => {
     panelButton(XP_ADJUST_BUTTON_ID, 'XPの調整', '✏️', ButtonStyle.Secondary),
     panelButton(XP_CHANNELS_BUTTON_ID, 'XPなしチャンネル', '🚫', ButtonStyle.Secondary),
   );
-  return { embeds: [embed], components: [memberRow, settingsRow, lookupRow, levelRow] };
+  // 押されたときはやりたいコンテンツの画面（wantList.ts）が受け取る
+  const otherRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    panelButton(WANT_ADMIN_BUTTON_ID, 'やりたいコンテンツ', '🎮', ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [memberRow, settingsRow, lookupRow, levelRow, otherRow] };
 };
 
 export const handleButton = async (interaction: ButtonInteraction<'cached'>): Promise<void> => {
