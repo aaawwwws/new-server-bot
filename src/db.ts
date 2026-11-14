@@ -426,15 +426,33 @@ export const initDatabase = async (): Promise<void> => {
       UNIQUE (guild_id, name)
     )
   `);
-  // メンバーが選んだもの（いくつでも）。item_key は「d<コンテンツファインダーのID>」（ゲームのコンテンツ）か「c<want_items の id>」（そのほか）
+  // メンバーが選んだもの（いくつでも）。item_key は「d<コンテンツファインダーのID>」（ゲームのコンテンツ）か「c<want_items の id>」（そのほか）。
+  // mode は normal（通常）か unsynced（制限解除）。同じものを両方で選ぶと「どちらでも」
   await pool.query(`
     CREATE TABLE IF NOT EXISTS want_votes (
       guild_id   text        NOT NULL,
       user_id    text        NOT NULL,
       item_key   text        NOT NULL,
+      mode       text        NOT NULL DEFAULT 'normal',
       created_at timestamptz NOT NULL DEFAULT now(),
-      PRIMARY KEY (guild_id, user_id, item_key)
+      PRIMARY KEY (guild_id, user_id, item_key, mode)
     )
+  `);
+  // 制限解除の選択より前に作った表には、mode の列を足して主キーにも入れる（今ある選択は「通常」のまま残る）
+  await pool.query("ALTER TABLE want_votes ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'normal'");
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint c
+          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+         WHERE c.conrelid = 'want_votes'::regclass AND c.contype = 'p' AND a.attname = 'mode'
+      ) THEN
+        ALTER TABLE want_votes DROP CONSTRAINT want_votes_pkey;
+        ALTER TABLE want_votes ADD PRIMARY KEY (guild_id, user_id, item_key, mode);
+      END IF;
+    END
+    $$
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS want_panels (

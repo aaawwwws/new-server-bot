@@ -56,43 +56,55 @@ export const deleteWantItem = async (guildId: string, itemId: string): Promise<W
   return removed ?? null;
 };
 
-/** 選ばれているものごとの、選んだ人（選んだ順） */
-export const listWantVotes = async (guildId: string): Promise<Map<string, string[]>> => {
-  const { rows } = await pool.query<{ item_key: string; user_id: string }>(
-    'SELECT item_key, user_id FROM want_votes WHERE guild_id = $1 ORDER BY created_at, user_id',
+/** 通常（レベル・ILの制限あり）か、制限解除か */
+export type WantMode = 'normal' | 'unsynced';
+
+/** 選んだもの1つ（同じものを両方のやり方で選ぶと2つになる） */
+export interface WantPick {
+  key: string;
+  mode: WantMode;
+}
+
+const toMode = (value: string): WantMode => (value === 'unsynced' ? 'unsynced' : 'normal');
+
+/** 選ばれているものごとの、選んだ人とやり方（選んだ順） */
+export const listWantVotes = async (guildId: string): Promise<Map<string, { userId: string; mode: WantMode }[]>> => {
+  const { rows } = await pool.query<{ item_key: string; user_id: string; mode: string }>(
+    'SELECT item_key, user_id, mode FROM want_votes WHERE guild_id = $1 ORDER BY created_at, user_id, mode',
     [guildId],
   );
-  const votes = new Map<string, string[]>();
-  for (const row of rows) votes.set(row.item_key, [...(votes.get(row.item_key) ?? []), row.user_id]);
+  const votes = new Map<string, { userId: string; mode: WantMode }[]>();
+  for (const row of rows) votes.set(row.item_key, [...(votes.get(row.item_key) ?? []), { userId: row.user_id, mode: toMode(row.mode) }]);
   return votes;
 };
 
 /** その人が選んでいるもの */
-export const listMemberWants = async (guildId: string, userId: string): Promise<string[]> => {
-  const { rows } = await pool.query<{ item_key: string }>('SELECT item_key FROM want_votes WHERE guild_id = $1 AND user_id = $2', [guildId, userId]);
-  return rows.map((row) => row.item_key);
+export const listMemberWants = async (guildId: string, userId: string): Promise<WantPick[]> => {
+  const { rows } = await pool.query<{ item_key: string; mode: string }>('SELECT item_key, mode FROM want_votes WHERE guild_id = $1 AND user_id = $2', [
+    guildId,
+    userId,
+  ]);
+  return rows.map((row) => ({ key: row.item_key, mode: toMode(row.mode) }));
 };
 
 /**
- * 選択メニュー1つ分（scope）の選択を置き換える。scope の外の選択はそのまま。
+ * 選択メニュー1つ分（scope・そのやり方）の選択を置き換える。scope の外の選択と、もう一方のやり方の選択はそのまま。
  * 前から選んでいたものは、選んだ順を変えない
  */
-export const replaceMemberWants = async (guildId: string, userId: string, scope: string[], selected: string[]): Promise<void> => {
+export const replaceMemberWants = async (guildId: string, userId: string, mode: WantMode, scope: string[], selected: string[]): Promise<void> => {
   const chosen = selected.filter((key) => scope.includes(key));
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('DELETE FROM want_votes WHERE guild_id = $1 AND user_id = $2 AND item_key = ANY($3::text[]) AND NOT (item_key = ANY($4::text[]))', [
-      guildId,
-      userId,
-      scope,
-      chosen,
-    ]);
     await client.query(
-      `INSERT INTO want_votes (guild_id, user_id, item_key)
-       SELECT $1, $2, key FROM unnest($3::text[]) AS key
+      'DELETE FROM want_votes WHERE guild_id = $1 AND user_id = $2 AND mode = $5 AND item_key = ANY($3::text[]) AND NOT (item_key = ANY($4::text[]))',
+      [guildId, userId, scope, chosen, mode],
+    );
+    await client.query(
+      `INSERT INTO want_votes (guild_id, user_id, item_key, mode)
+       SELECT $1, $2, key, $4 FROM unnest($3::text[]) AS key
        ON CONFLICT DO NOTHING`,
-      [guildId, userId, chosen],
+      [guildId, userId, chosen, mode],
     );
     await client.query('COMMIT');
   } catch (error) {

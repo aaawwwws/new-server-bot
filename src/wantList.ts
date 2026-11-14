@@ -42,6 +42,8 @@ import {
   resetWantVotes,
   seedWantItems,
   type WantItem,
+  type WantMode,
+  type WantPick,
 } from './wantStore.js';
 
 // やりたいコンテンツ。メンバーが今やりたいものをいくつでも選び、パネルに人数の多い順で並べる（誰が選んだかも出す）。
@@ -57,13 +59,16 @@ export const PICK_ID = `${CUSTOM_ID_PREFIX}pick`;
 const CATEGORY_ID = `${CUSTOM_ID_PREFIX}cat`;
 /** 拡張の選択（want:ex:<カテゴリー>） */
 const EXPANSION_PREFIX = `${CUSTOM_ID_PREFIX}ex:`;
-/** コンテンツの選択（want:sel:<カテゴリー>:<拡張 か ->:<ページ>） */
+/** コンテンツの選択（want:sel:<カテゴリー>:<拡張 か ->:<ページ>:<n（通常）か u（制限解除）>） */
 const SELECT_PREFIX = `${CUSTOM_ID_PREFIX}sel:`;
 /** ページの切り替え（want:page:<カテゴリー>:<拡張 か ->:<ページ>） */
 const PAGE_PREFIX = `${CUSTOM_ID_PREFIX}page:`;
 /** 拡張の選択に戻る（want:back:<カテゴリー>） */
 const BACK_PREFIX = `${CUSTOM_ID_PREFIX}back:`;
 const CLEAR_ID = `${CUSTOM_ID_PREFIX}clear`;
+/** パネルの「👀 誰が選んだか見る」と、その画面のコンテンツの選択 */
+const WHO_ID = `${CUSTOM_ID_PREFIX}who`;
+const WHO_SELECT_ID = `${CUSTOM_ID_PREFIX}whosel`;
 /** 管理パネルの「🎮 やりたいコンテンツ」 */
 export const ADMIN_BUTTON_ID = `${CUSTOM_ID_PREFIX}admin`;
 const ADD_ID = `${CUSTOM_ID_PREFIX}add`;
@@ -81,10 +86,12 @@ export const MAX_ITEMS = 25;
 /** 選択メニュー1つに並べられる数（Discordの上限） */
 const PAGE_SIZE = 25;
 const MAX_NAME_LENGTH = 30;
-/** パネルに出すコンテンツの数（人数の多い順。残りは件数でまとめる） */
-const MAX_SHOWN = 20;
-/** パネルに名前を出す人数（コンテンツごと。長くなりすぎたら減らす） */
-const NAMES_PER_ITEM = 3;
+/** パネルに出す、カテゴリーごとのコンテンツの数（人数の多い順。残りは件数でまとめる。長くなりすぎたら減らす） */
+const PER_CATEGORY = 5;
+/** 「誰が選んだか見る」で並べるコンテンツの数（選択メニューの上限） */
+const WHO_OPTIONS = 25;
+/** 「誰が選んだか見る」で名前を出す人数 */
+const MAX_WHO_NAMES = 80;
 /** 本文の長さの上限（Discordは4096文字。少し余裕を持たせる） */
 const MAX_DESCRIPTION_LENGTH = 4000;
 /** 選ぶ画面の上に出す、今の選択の数 */
@@ -92,7 +99,6 @@ const MAX_LISTED_PICKS = 15;
 const COLOR = 0x9b59b6;
 /** 抜けた人・非アクティブになった人を反映するため、この間隔でパネルを作り直す（変わったときだけ編集する） */
 const REFRESH_MS = 60 * 60_000;
-const MEDALS = ['🥇', '🥈', '🥉'];
 
 type CategoryKey = DutyCategory | 'other';
 
@@ -113,6 +119,15 @@ const CATEGORIES: readonly { key: CategoryKey; label: string; emoji: string; byE
   { key: 'other', label: 'そのほか', emoji: '✨', byExpansion: false },
 ];
 const EXPANSIONS = ['新生エオルゼア', '蒼天のイシュガルド', '紅蓮のリベレーター', '漆黒のヴィランズ', '暁月のフィナーレ', '黄金のレガシー'];
+
+/** 制限解除で行ける種類（ディープダンジョン・特殊フィールド・宝物庫・PvPなどは、もともと制限解除がない） */
+const UNSYNCABLE: ReadonlySet<CategoryKey> = new Set<CategoryKey>(['savage', 'ultimate', 'extreme', 'raid', 'alliance', 'trial', 'dungeon']);
+/** 最新の拡張（一覧で一番新しい拡張）。ここのコンテンツは制限解除できない。次の拡張が出て一覧を作り直せば、自動で次に移る */
+export const LATEST_EXPANSION = Math.max(...DUTIES.map((duty) => duty.expansion));
+/** customId の、やり方の印 */
+const MODE_CODES: Record<WantMode, string> = { normal: 'n', unsynced: 'u' };
+/** 🔓 は制限解除でもいい人 */
+const UNSYNCED_MARK = '🔓';
 
 /** パネルを初めて置いたときに入れておく「そのほか」（ゲームのコンテンツにないもの。管理者があとで足し引きできる） */
 export const DEFAULT_ITEMS = [
@@ -171,11 +186,35 @@ const optionLabel = (option: WantOption): string => `${option.emoji} ${option.na
 const groupOptions = (options: WantOption[], category: CategoryKey, expansion: number | null): WantOption[] =>
   options.filter((option) => option.category === category && (expansion === null || option.expansion === expansion));
 
+/** 制限解除でも選べるか（制限解除がある種類で、最新の拡張より前のもの） */
+export const canUnsync = (option: Pick<WantOption, 'category' | 'expansion'>): boolean =>
+  UNSYNCABLE.has(option.category) && option.expansion !== null && option.expansion < LATEST_EXPANSION;
+
+/** 選んだやり方の書き方（通常だけなら何も付けない） */
+const modeTag = (modes: ReadonlySet<WantMode>): string => {
+  if (!modes.has('unsynced')) return '';
+  return modes.has('normal') ? '（どちらでも）' : '（制限解除）';
+};
+
+/** その人の選択を、もの（キー）ごとのやり方にまとめる */
+const picksByKey = (mine: WantPick[]): Map<string, Set<WantMode>> => {
+  const map = new Map<string, Set<WantMode>>();
+  for (const pick of mine) map.set(pick.key, new Set([...(map.get(pick.key) ?? []), pick.mode]));
+  return map;
+};
+
 // ---- パネル
+
+/** 選んだ人1人（そのものを、どのやり方で選んだか） */
+interface Voter {
+  member: GuildMember;
+  normal: boolean;
+  unsynced: boolean;
+}
 
 interface Tally {
   option: WantOption;
-  members: GuildMember[];
+  voters: Voter[];
 }
 
 /** 選ばれているものごとの、数える人（選んだ順）。人数の多い順（同じなら一覧の順）。0人のものは入れない */
@@ -184,56 +223,116 @@ const tally = async (guild: Guild): Promise<Tally[]> => {
   const inactive = findInactiveRole(guild);
   const counted = (member: GuildMember): boolean => !member.user.bot && !(inactive && member.roles.cache.has(inactive.id));
   return options
-    .map((option) => ({
-      option,
-      members: (votes.get(option.key) ?? []).flatMap((id) => {
-        const member = members.get(id);
-        return member && counted(member) ? [member] : [];
-      }),
-    }))
-    .filter((entry) => entry.members.length > 0)
-    .sort((a, b) => b.members.length - a.members.length || a.option.order - b.option.order);
+    .map((option) => {
+      const voters = new Map<string, Voter>();
+      for (const vote of votes.get(option.key) ?? []) {
+        const member = members.get(vote.userId);
+        if (!member || !counted(member)) continue;
+        const voter = voters.get(member.id) ?? { member, normal: false, unsynced: false };
+        voter[vote.mode] = true;
+        voters.set(member.id, voter);
+      }
+      return { option, voters: [...voters.values()] };
+    })
+    .filter((entry) => entry.voters.length > 0)
+    .sort((a, b) => b.voters.length - a.voters.length || a.option.order - b.option.order);
 };
 
-/** 一覧の行（同じ人数なら同じ順位）。名前は namesPerItem 人まで（0なら名前を出さない） */
-const tallyLine = (tallies: Tally[], entry: Tally, namesPerItem: number): string => {
-  const rank = tallies.filter((other) => other.members.length > entry.members.length).length + 1;
-  const head = `${MEDALS[rank - 1] ?? `**${rank}.**`} **${escapeMarkdown(optionLabel(entry.option))}**　${entry.members.length}人`;
-  if (namesPerItem === 0) return head;
-  const names = entry.members.slice(0, namesPerItem).map((member) => escapeMarkdown(member.displayName)).join('・');
-  const more = entry.members.length > namesPerItem ? ` ほか${entry.members.length - namesPerItem}人` : '';
-  return `${head}\n　${names}${more}`;
+/** 制限解除でもいい人の数 */
+const unsyncedCount = (entry: Tally): number => entry.voters.filter((voter) => voter.unsynced).length;
+
+/** パネルに出す名前（そのほかは、管理者が付けた絵文字も。ゲームのコンテンツはカテゴリーの見出しに絵文字がある） */
+const panelName = (option: WantOption): string => (option.category === 'other' ? optionLabel(option) : option.name);
+
+/** パネルの1行「4人　希望の園エデン零式：覚醒編1　🔓2」 */
+const itemLine = (entry: Tally): string => {
+  const unsynced = unsyncedCount(entry);
+  return `　**${entry.voters.length}人**　${escapeMarkdown(panelName(entry.option))}${unsynced > 0 ? `　${UNSYNCED_MARK}${unsynced}` : ''}`;
 };
 
-/** パネルの中身（設置するときと、選ばれたとき・1時間ごとに作り直すときで共通） */
+/** パネルの中身（設置するときと、選ばれたとき・1時間ごとに作り直すときで共通）。カテゴリーごとに、人数の多い順 */
 export const buildWantPanel = async (guild: Guild) => {
   const tallies = await tally(guild);
-  const shown = tallies.slice(0, MAX_SHOWN);
-  const rest = tallies.slice(MAX_SHOWN);
-  const people = new Set(tallies.flatMap((entry) => entry.members.map((member) => member.id))).size;
-  const describe = (namesPerItem: number): string =>
+  const people = new Set(tallies.flatMap((entry) => entry.voters.map((voter) => voter.member.id))).size;
+  const sections = CATEGORIES.map((category) => ({ category, entries: tallies.filter((entry) => entry.option.category === category.key) })).filter(
+    (section) => section.entries.length > 0,
+  );
+  const describe = (perCategory: number): string =>
     [
-      '「✋ やりたいものを選ぶ」から、今やりたいコンテンツを選んでください（いくつでも）。人数の多い順に並びます。',
-      '零式・絶・討滅戦・ダンジョンなどゲームの全コンテンツと、地図・ギャザクラなどから選べます。同じものを選んだ人に声をかけたり、PT募集を立てるときの参考にどうぞ。',
-      '',
-      ...(shown.length > 0 ? shown.map((entry) => tallyLine(tallies, entry, namesPerItem)) : ['まだ誰も選んでいません。']),
-      ...(rest.length > 0 ? ['', `ほか${rest.length}件のコンテンツが選ばれています（自分の選択は「やりたいものを選ぶ」で見られます）。`] : []),
+      '「✋ やりたいものを選ぶ」で、今やりたいコンテンツを選べます（いくつでも）。「👀 誰が選んだか見る」で、選んだ人の名前を見られます。',
+      `${UNSYNCED_MARK} は制限解除でもいい人の数です（最新の拡張「${EXPANSIONS[LATEST_EXPANSION] ?? ''}」は制限解除できません）。`,
+      ...(sections.length > 0
+        ? sections.flatMap(({ category, entries }) => [
+            '',
+            `${category.emoji} **${category.label}**`,
+            ...entries.slice(0, perCategory).map(itemLine),
+            ...(entries.length > perCategory ? [`　…ほか${entries.length - perCategory}件`] : []),
+          ])
+        : ['', 'まだ誰も選んでいません。']),
     ].join('\n');
-  // 選ぶ人が増えて長くなりすぎたら、名前を出す人数を減らして収める（それでも長ければ後ろを切る）
+  // 選ぶ人が増えて長くなりすぎたら、カテゴリーごとの件数を減らして収める（それでも長ければ後ろを切る）
   const description =
-    [NAMES_PER_ITEM, 1, 0].map(describe).find((text) => text.length <= MAX_DESCRIPTION_LENGTH) ?? `${describe(0).slice(0, MAX_DESCRIPTION_LENGTH - 1)}…`;
+    [PER_CATEGORY, 3, 1].map(describe).find((text) => text.length <= MAX_DESCRIPTION_LENGTH) ?? `${describe(1).slice(0, MAX_DESCRIPTION_LENGTH - 1)}…`;
   const embed = new EmbedBuilder()
     .setColor(COLOR)
-    .setTitle('🎮 みんなのやりたいコンテンツ')
+    .setTitle(`🎮 みんなのやりたいコンテンツ（${people}人）`)
     .setDescription(description)
-    .setFooter({ text: `${people}人が選んでいます・サーバーにいない人と「${INACTIVE_ROLE_NAME}」の人は数えません` });
+    .setFooter({ text: `サーバーにいない人と「${INACTIVE_ROLE_NAME}」の人は数えません` });
   return {
     embeds: [embed],
     components: [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder().setCustomId(PICK_ID).setLabel('やりたいものを選ぶ').setEmoji({ name: '✋' }).setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(WHO_ID).setLabel('誰が選んだか見る').setEmoji({ name: '👀' }).setStyle(ButtonStyle.Secondary),
       ),
     ],
+  };
+};
+
+/** 「👀 誰が選んだか見る」の画面（本人にだけ見える）。selectedKey を選ぶと、選んだ人の名前を出す */
+const whoScreen = async (guild: Guild, selectedKey?: string) => {
+  const tallies = await tally(guild);
+  if (tallies.length === 0) return { content: 'まだ誰も選んでいません。', components: [], allowedMentions: { parse: [] } };
+  const top = tallies.slice(0, WHO_OPTIONS);
+  const chosen = selectedKey ? tallies.find((entry) => entry.option.key === selectedKey) : undefined;
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(WHO_SELECT_ID)
+    .setPlaceholder('見たいコンテンツを選ぶ')
+    .addOptions(
+      top.map((entry) => {
+        const unsynced = unsyncedCount(entry);
+        return {
+          label: entry.option.name.slice(0, 100),
+          value: entry.option.key,
+          description: `${entry.voters.length}人${unsynced > 0 ? `・制限解除でもいい人 ${unsynced}人` : ''}`,
+          emoji: { name: entry.option.emoji },
+          default: entry.option.key === chosen?.option.key,
+        };
+      }),
+    );
+  const details = chosen
+    ? (() => {
+        const names = chosen.voters
+          .slice(0, MAX_WHO_NAMES)
+          .map((voter) => `${escapeMarkdown(voter.member.displayName)}${voter.unsynced ? UNSYNCED_MARK : ''}`)
+          .join('・');
+        const more = chosen.voters.length > MAX_WHO_NAMES ? ` ほか${chosen.voters.length - MAX_WHO_NAMES}人` : '';
+        const unsynced = unsyncedCount(chosen);
+        return [
+          `${chosen.option.emoji} **${escapeMarkdown(chosen.option.name)}**　${chosen.voters.length}人${unsynced > 0 ? `（${UNSYNCED_MARK} 制限解除でもいい人 ${unsynced}人）` : ''}`,
+          `${names}${more}`,
+          '',
+          '同じものを選んだ人に声をかけたり、PT募集を立ててみましょう。',
+        ];
+      })()
+    : [
+        selectedKey ? 'それはもう誰も選んでいません。' : '見たいコンテンツを選んでください（人数の多い順）。',
+        ...(tallies.length > WHO_OPTIONS ? [`選ばれているのは${tallies.length}件で、ここには上位${WHO_OPTIONS}件を並べています。`] : []),
+      ];
+  return {
+    content: ['👀 **誰が選んだか見る**', ...details].join('\n'),
+    components: [row(select)],
+    allowedMentions: { parse: [] },
   };
 };
 
@@ -308,13 +407,23 @@ const row = (...components: MessageActionRowComponentBuilder[]): Row => new Acti
 const button = (id: string, label: string, emoji: string, style: ButtonStyle = ButtonStyle.Secondary): ButtonBuilder =>
   new ButtonBuilder().setCustomId(id).setLabel(label).setEmoji({ name: emoji }).setStyle(style);
 
-/** 画面の上に出す、今の選択 */
-const picksSummary = (options: WantOption[], mine: string[]): string => {
-  const picked = options.filter((option) => mine.includes(option.key));
+/** 画面の上に出す、今の選択（制限解除を選んだものには、そのやり方を付ける） */
+const picksSummary = (options: WantOption[], mine: WantPick[]): string => {
+  const modes = picksByKey(mine);
+  const picked = options.filter((option) => modes.has(option.key));
   if (picked.length === 0) return '今の選択: なし';
-  const listed = picked.slice(0, MAX_LISTED_PICKS).map(optionLabel).join('・');
+  const listed = picked
+    .slice(0, MAX_LISTED_PICKS)
+    .map((option) => `${optionLabel(option)}${modeTag(modes.get(option.key) ?? new Set())}`)
+    .join('・');
   const more = picked.length > MAX_LISTED_PICKS ? ` ほか${picked.length - MAX_LISTED_PICKS}件` : '';
   return `今の選択（${picked.length}件）: ${listed}${more}`;
+};
+
+/** その中で選んでいる数（やり方は問わない） */
+const pickedCount = (group: WantOption[], mine: WantPick[]): number => {
+  const keys = new Set(mine.map((pick) => pick.key));
+  return group.filter((option) => keys.has(option.key)).length;
 };
 
 /** 非アクティブの人には、数えられないことを知らせる */
@@ -333,7 +442,7 @@ const homeScreen = async (member: GuildMember, note?: string) => {
     .setPlaceholder('カテゴリーを選ぶ')
     .addOptions(
       CATEGORIES.filter((category) => groupOptions(options, category.key, null).length > 0).map((category) => {
-        const picked = groupOptions(options, category.key, null).filter((option) => mine.includes(option.key)).length;
+        const picked = pickedCount(groupOptions(options, category.key, null), mine);
         return { label: category.label, value: category.key, emoji: { name: category.emoji }, ...(picked > 0 ? { description: `${picked}件 選択中` } : {}) };
       }),
     );
@@ -363,7 +472,7 @@ const expansionScreen = async (member: GuildMember, category: CategoryKey) => {
     .addOptions(
       expansions.map((expansion) => {
         const group = groupOptions(options, category, expansion);
-        const picked = group.filter((option) => mine.includes(option.key)).length;
+        const picked = pickedCount(group, mine);
         return {
           label: EXPANSIONS[expansion] ?? `拡張${expansion}`,
           value: String(expansion),
@@ -396,12 +505,24 @@ const groupScreen = async (member: GuildMember, category: CategoryKey, expansion
       allowedMentions: { parse: [] },
     };
   }
-  const select = new StringSelectMenuBuilder()
-    .setCustomId(`${SELECT_PREFIX}${category}:${expansionKey}:${current}`)
-    .setPlaceholder('やりたいものを選ぶ（いくつでも）')
-    .setMinValues(0)
-    .setMaxValues(onPage.length)
-    .addOptions(onPage.map((option) => ({ label: option.name.slice(0, 100), value: option.key, default: mine.includes(option.key) })));
+  const has = (key: string, mode: WantMode): boolean => mine.some((pick) => pick.key === key && pick.mode === mode);
+  const unsyncable = onPage.filter(canUnsync);
+  // 制限解除がある種類なら、「通常」と「制限解除」の2つのメニューを並べる（両方で選ぶと「どちらでも」）
+  const selectFor = (mode: WantMode, items: WantOption[], placeholder: string): StringSelectMenuBuilder =>
+    new StringSelectMenuBuilder()
+      .setCustomId(`${SELECT_PREFIX}${category}:${expansionKey}:${current}:${MODE_CODES[mode]}`)
+      .setPlaceholder(placeholder)
+      .setMinValues(0)
+      .setMaxValues(items.length)
+      .addOptions(items.map((option) => ({ label: option.name.slice(0, 100), value: option.key, default: has(option.key, mode) })));
+  const selects =
+    unsyncable.length > 0
+      ? [selectFor('normal', onPage, '通常（レベル・ILの制限あり）でやりたいもの'), selectFor('unsynced', unsyncable, `${UNSYNCED_MARK} 制限解除でやりたいもの`)]
+      : [selectFor('normal', onPage, 'やりたいものを選ぶ（いくつでも）')];
+  const latestNote =
+    UNSYNCABLE.has(category) && unsyncable.length === 0 && expansion === LATEST_EXPANSION
+      ? [`最新の拡張「${EXPANSIONS[LATEST_EXPANSION] ?? ''}」のコンテンツは、制限解除できません。`]
+      : [];
   const buttons = [
     ...(pages > 1
       ? [
@@ -415,53 +536,65 @@ const groupScreen = async (member: GuildMember, category: CategoryKey, expansion
     content: [
       ...(note ? [note, ''] : []),
       title,
-      'やりたいものを選んでください（いくつでも）。外すときは、メニューで選択を外します。',
+      unsyncable.length > 0
+        ? `やりたいものを選んでください（いくつでも）。上は通常、下の ${UNSYNCED_MARK} は制限解除で、両方で選ぶと「どちらでも」になります。外すときは、メニューで選択を外します。`
+        : 'やりたいものを選んでください（いくつでも）。外すときは、メニューで選択を外します。',
+      ...latestNote,
       picksSummary(options, mine),
       ...inactiveNote(member),
     ].join('\n'),
-    components: [row(select), row(...buttons)],
+    components: [...selects.map((select) => row(select)), row(...buttons)],
     allowedMentions: { parse: [] },
   };
 };
 
-/** メニュー1つ分の選択を保存して、パネルとログに反映する。結果の一言を返す */
-const saveGroup = async (member: GuildMember, scope: WantOption[], selected: string[]): Promise<string> => {
-  const before = await listMemberWants(member.guild.id, member.id);
-  const keys = scope.map((option) => option.key);
-  await replaceMemberWants(member.guild.id, member.id, keys, selected);
+const MODE_LABELS: Record<WantMode, string> = { normal: '通常', unsynced: '制限解除' };
+
+/** メニュー1つ分（そのやり方）の選択を保存して、パネルとログに反映する。結果の一言を返す */
+const saveGroup = async (member: GuildMember, scope: WantOption[], mode: WantMode, selected: string[]): Promise<string> => {
+  const before = (await listMemberWants(member.guild.id, member.id)).filter((pick) => pick.mode === mode).map((pick) => pick.key);
+  await replaceMemberWants(
+    member.guild.id,
+    member.id,
+    mode,
+    scope.map((option) => option.key),
+    selected,
+  );
   const added = scope.filter((option) => selected.includes(option.key) && !before.includes(option.key));
   const removed = scope.filter((option) => before.includes(option.key) && !selected.includes(option.key));
   if (added.length === 0 && removed.length === 0) return '変更はありませんでした。';
   refreshSoon(member.guild);
-  logChange(member, added, removed);
-  return [...(added.length > 0 ? [`✅ ${added.length}件 選びました`] : []), ...(removed.length > 0 ? [`${removed.length}件 外しました`] : [])].join('・') + '。';
+  logChange(member, added, removed, mode);
+  const how = mode === 'unsynced' ? `（${MODE_LABELS.unsynced}）` : '';
+  return [...(added.length > 0 ? [`✅ ${added.length}件 選びました${how}`] : []), ...(removed.length > 0 ? [`${removed.length}件 外しました${how}`] : [])].join('・') + '。';
 };
 
-const logChange = (member: GuildMember, added: WantOption[], removed: WantOption[]): void => {
+const logChange = (member: GuildMember, added: WantOption[], removed: WantOption[], mode: WantMode | null): void => {
+  const how = mode === null ? '' : `（${MODE_LABELS[mode]}）`;
   void sendLog(member.guild, 'want', `${member} がやりたいコンテンツを変えました`, member, {
     fields: [
-      ...(added.length > 0 ? [{ name: '➕ 選んだ', value: added.map(optionLabel).join('・').slice(0, 1000), inline: true }] : []),
-      ...(removed.length > 0 ? [{ name: '➖ 外した', value: removed.map(optionLabel).join('・').slice(0, 1000), inline: true }] : []),
+      ...(added.length > 0 ? [{ name: `➕ 選んだ${how}`, value: added.map(optionLabel).join('・').slice(0, 1000), inline: true }] : []),
+      ...(removed.length > 0 ? [{ name: `➖ 外した${how}`, value: removed.map(optionLabel).join('・').slice(0, 1000), inline: true }] : []),
     ],
   });
 };
 
-/** customId の「<カテゴリー>:<拡張 か ->:<ページ>」を読む。おかしければ null */
-const parseGroupId = (rest: string): { category: CategoryKey; expansion: number | null; page: number } | null => {
-  const [category = '', expansionText = '', pageText = ''] = rest.split(':');
+/** customId の「<カテゴリー>:<拡張 か ->:<ページ>[:<やり方>]」を読む。おかしければ null */
+const parseGroupId = (rest: string): { category: CategoryKey; expansion: number | null; page: number; mode: WantMode } | null => {
+  const [category = '', expansionText = '', pageText = '', modeCode = MODE_CODES.normal] = rest.split(':');
   const info = categoryInfo(category);
   if (!info) return null;
   const expansion = expansionText === NO_EXPANSION ? null : Number(expansionText);
   const page = Number(pageText);
   if ((expansion !== null && !Number.isInteger(expansion)) || !Number.isInteger(page)) return null;
-  return { category: info.key, expansion, page };
+  return { category: info.key, expansion, page, mode: modeCode === MODE_CODES.unsynced ? 'unsynced' : 'normal' };
 };
 
 // ---- 管理者の画面（管理パネルの「🎮 やりたいコンテンツ」）
 
 export const adminScreen = async (guild: Guild, note?: string) => {
   const [items, votes] = await Promise.all([listWantItems(guild.id), listWantVotes(guild.id)]);
-  const count = (item: WantItem): number => votes.get(`c${item.id}`)?.length ?? 0;
+  const count = (item: WantItem): number => new Set((votes.get(`c${item.id}`) ?? []).map((vote) => vote.userId)).size;
   const label = (item: WantItem): string => `${item.emoji ? `${item.emoji} ` : ''}${item.name}`;
   const components: Row[] = [
     row(
@@ -535,13 +668,24 @@ export const handleComponent = async (interaction: ButtonInteraction<'cached'> |
     await interaction.editReply(await homeScreen(member));
     return;
   }
+  if (customId === WHO_ID) {
+    await deferScreen(interaction);
+    await interaction.editReply(await whoScreen(guild));
+    return;
+  }
+  if (customId === WHO_SELECT_ID && interaction.isStringSelectMenu()) {
+    await interaction.deferUpdate();
+    await interaction.editReply(await whoScreen(guild, interaction.values[0]));
+    return;
+  }
   if (customId === CLEAR_ID) {
     await interaction.deferUpdate();
     const [options, before] = await Promise.all([loadOptions(guild.id), listMemberWants(guild.id, member.id)]);
     await clearMemberWants(guild.id, member.id);
     if (before.length > 0) {
       refreshSoon(guild);
-      logChange(member, [], options.filter((option) => before.includes(option.key)));
+      const keys = new Set(before.map((pick) => pick.key));
+      logChange(member, [], options.filter((option) => keys.has(option.key)), null);
     }
     await interaction.editReply(await homeScreen(member, before.length > 0 ? '🧹 全部外しました。' : '変更はありませんでした。'));
     return;
@@ -579,10 +723,12 @@ export const handleComponent = async (interaction: ButtonInteraction<'cached'> |
     const target = parseGroupId(customId.slice(SELECT_PREFIX.length));
     if (!target) return;
     await interaction.deferUpdate();
-    // 保存するのは、そのメニューに並んでいたものだけ（ほかのページ・カテゴリーの選択はそのまま）
+    // 保存するのは、そのメニューに並んでいたものだけ（ほかのページ・カテゴリーと、もう一方のやり方の選択はそのまま）。
+    // 制限解除のメニューには、制限解除できるものしか並ばない
     const group = groupOptions(await loadOptions(guild.id), target.category, target.expansion);
-    const scope = group.slice(target.page * PAGE_SIZE, (target.page + 1) * PAGE_SIZE);
-    const note = await saveGroup(member, scope, interaction.values);
+    const onPage = group.slice(target.page * PAGE_SIZE, (target.page + 1) * PAGE_SIZE);
+    const scope = target.mode === 'unsynced' ? onPage.filter(canUnsync) : onPage;
+    const note = await saveGroup(member, scope, target.mode, interaction.values);
     await interaction.editReply(await groupScreen(member, target.category, target.expansion, target.page, note));
     return;
   }
