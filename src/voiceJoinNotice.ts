@@ -3,6 +3,7 @@ import { buildJoinNoticeEmbed, buildProfileEmbed } from './profile.js';
 import { loadJoinAnnounceOrDefault } from './memberSettings.js';
 import { findStoredProfile } from './profileStore.js';
 import { findLobby } from './tempVoiceStore.js';
+import { loadWantSummary } from './wantSummary.js';
 
 /** 抜けてすぐ入り直したとき（回線落ちなど）に何度も送らないための間隔 */
 const COOLDOWN_MS = 60_000;
@@ -41,6 +42,8 @@ export const handleVoiceStateUpdate = async (oldState: VoiceState, newState: Voi
 
   // 登録済みならプロフに投稿したものと同じ埋め込み、未登録なら入室したことだけ送る
   const stored = await findStoredProfile(newState.guild.id, member.id);
-  const embed = stored ? buildProfileEmbed(member, stored.profile) : buildJoinNoticeEmbed(member);
+  // やりたいコンテンツで選んだものも載せる（読めなければ載せずに送る）
+  const wants = stored ? await loadWantSummary(newState.guild.id, member.id).catch(() => null) : null;
+  const embed = stored ? buildProfileEmbed(member, stored.profile, wants) : buildJoinNoticeEmbed(member);
   await channel.send({ embeds: [embed] });
 };

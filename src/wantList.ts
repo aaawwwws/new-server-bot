@@ -28,6 +28,8 @@ import { fetchAllMembers } from './guildUtils.js';
 import { INACTIVE_ROLE_NAME, findInactiveRole } from './inactiveRole.js';
 import { createLock } from './locks.js';
 import { ensureAdmin } from './permissions.js';
+import { refreshPostedProfile } from './profilePublish.js';
+import { modeTag } from './wantSummary.js';
 import {
   addWantItem,
   addWantPanel,
@@ -191,11 +193,6 @@ export const canUnsync = (option: Pick<WantOption, 'category' | 'expansion'>): b
   UNSYNCABLE.has(option.category) && option.expansion !== null && option.expansion < LATEST_EXPANSION;
 
 /** 選んだやり方の書き方（通常だけなら何も付けない） */
-const modeTag = (modes: ReadonlySet<WantMode>): string => {
-  if (!modes.has('unsynced')) return '';
-  return modes.has('normal') ? '（どちらでも）' : '（制限解除）';
-};
-
 /** その人の選択を、もの（キー）ごとのやり方にまとめる */
 const picksByKey = (mine: WantPick[]): Map<string, Set<WantMode>> => {
   const map = new Map<string, Set<WantMode>>();
@@ -384,6 +381,20 @@ export const refreshWantPanels = async (guild: Guild): Promise<void> => {
   });
 };
 
+/**
+ * その人たちのプロフの投稿を、今の「やりたいこと」に書き換える（管理者が「そのほか」を消した・リセットしたとき）。
+ * 何人もいることがあるので、操作は待たずに1人ずつ（失敗してもコンソールに出すだけ）
+ */
+const refreshProfilesOf = (guild: Guild, userIds: Iterable<string>): void => {
+  const ids = [...new Set(userIds)];
+  void (async () => {
+    for (const id of ids) {
+      const member = guild.members.cache.get(id);
+      if (member) await refreshPostedProfile(member);
+    }
+  })();
+};
+
 /** 選んだあとなどに、待たずにパネルを書き換える（失敗しても操作は止めない） */
 const refreshSoon = (guild: Guild): void => {
   refreshWantPanels(guild).catch((error: unknown) => {
@@ -564,6 +575,8 @@ const saveGroup = async (member: GuildMember, scope: WantOption[], mode: WantMod
   const removed = scope.filter((option) => before.includes(option.key) && !selected.includes(option.key));
   if (added.length === 0 && removed.length === 0) return '変更はありませんでした。';
   refreshSoon(member.guild);
+  // プロフの投稿の「やりたいこと」も書き換える（登録していない人は何もしない。失敗しても選択は保存済み）
+  void refreshPostedProfile(member);
   logChange(member, added, removed, mode);
   const how = mode === 'unsynced' ? `（${MODE_LABELS.unsynced}）` : '';
   return [...(added.length > 0 ? [`✅ ${added.length}件 選びました${how}`] : []), ...(removed.length > 0 ? [`${removed.length}件 外しました${how}`] : [])].join('・') + '。';
@@ -684,6 +697,7 @@ export const handleComponent = async (interaction: ButtonInteraction<'cached'> |
     await clearMemberWants(guild.id, member.id);
     if (before.length > 0) {
       refreshSoon(guild);
+      void refreshPostedProfile(member);
       const keys = new Set(before.map((pick) => pick.key));
       logChange(member, [], options.filter((option) => keys.has(option.key)), null);
     }
@@ -747,9 +761,12 @@ export const handleComponent = async (interaction: ButtonInteraction<'cached'> |
     case REMOVE_SELECT_ID: {
       if (!interaction.isStringSelectMenu()) return;
       await interaction.deferUpdate();
+      // 消す前に、それを選んでいた人を覚えておく（その人たちのプロフの投稿も書き換えるため）
+      const pickers = (await listWantVotes(guild.id)).get(`c${interaction.values[0] ?? ''}`)?.map((vote) => vote.userId) ?? [];
       const removed = await deleteWantItem(guild.id, interaction.values[0] ?? '');
       if (removed) {
         refreshSoon(guild);
+        refreshProfilesOf(guild, pickers);
         void sendLog(guild, 'want', `${member} がやりたいコンテンツの「そのほか」から「${removed.name}」を消しました`, member, { title: 'やりたいコンテンツの一覧' });
       }
       await interaction.editReply(await adminScreen(guild, removed ? `🗑️「${removed.name}」を消しました。` : 'それはもうありません。'));
@@ -763,8 +780,10 @@ export const handleComponent = async (interaction: ButtonInteraction<'cached'> |
       return;
     case RESET_CONFIRM_ID: {
       await interaction.deferUpdate();
+      const pickers = [...(await listWantVotes(guild.id)).values()].flat().map((vote) => vote.userId);
       const count = await resetWantVotes(guild.id);
       refreshSoon(guild);
+      refreshProfilesOf(guild, pickers);
       void sendLog(guild, 'want', `${member} がやりたいコンテンツの全員の選択をリセットしました（${count}件）`, member, { title: 'やりたいコンテンツのリセット' });
       await interaction.editReply(await adminScreen(guild, `🔄 全員の選択を消しました（${count}件）。`));
     }

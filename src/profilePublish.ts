@@ -3,6 +3,7 @@ import { findTextChannel } from './guildUtils.js';
 import { buildProfileMessage, legacyProfileHeader, parseProfile, profileHeader, type Profile } from './profile.js';
 import { findStoredProfile, saveProfile, type StoredProfile } from './profileStore.js';
 import { findProgressRoles } from './progressRoles.js';
+import { loadWantSummary } from './wantSummary.js';
 
 /** 許可されたプロフィールを投稿するチャンネルの名前 */
 export const PROFILE_CHANNEL_NAME = 'プロフ';
@@ -41,7 +42,12 @@ export const publishProfile = async (
   profile: Profile,
   { grantMemberRole: shouldGrant = true }: { grantMemberRole?: boolean } = {},
 ): Promise<PublishResult> => {
-  const payload = buildProfileMessage(member, profile);
+  // やりたいコンテンツで選んだものも載せる（読めなくても投稿は止めない）
+  const wants = await loadWantSummary(member.guild.id, member.id).catch((error: unknown) => {
+    console.error('やりたいコンテンツを読めませんでした（プロフィールには載せずに投稿します）:', error);
+    return null;
+  });
+  const payload = buildProfileMessage(member, profile, wants);
   const stored = await findStoredProfile(member.guild.id, member.id);
   const existing = await findPostedProfile(channel, member.id, stored);
   const message = existing ? await existing.edit(payload) : await channel.send(payload);

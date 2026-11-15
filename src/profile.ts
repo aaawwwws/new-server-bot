@@ -30,6 +30,8 @@ export const RECENT_LABEL = '最近やっていること';
 const RECENT_FIELD = `🕹️ ${RECENT_LABEL}`;
 export const X_LABEL = 'X';
 const X_FIELD = `🐦 ${X_LABEL}`;
+/** やりたいコンテンツで選んだもの（プロフィールの保存した内容ではないので、出すときに別に渡す） */
+const WANT_FIELD = '✋ やりたいこと';
 /** Xのユーザー名に使える文字と長さ（英数字と _ で15文字まで） */
 const X_HANDLE = '[A-Za-z0-9_]{1,15}';
 const UNSET = '未設定';
@@ -50,8 +52,11 @@ export const profileHeader = (userId: string): string => `<@${userId}>`;
 /** 以前の投稿の本文（「〜のプロフィール」まで書いていた頃のもの） */
 export const legacyProfileHeader = (userId: string): string => `<@${userId}> のプロフィール`;
 
-/** 進行度・よく遊ぶコンテンツと色は、その時点でメンバーに付いているロールから決める */
-export const buildProfileEmbed = (member: GuildMember, profile: Profile): EmbedBuilder => {
+/**
+ * 進行度・よく遊ぶコンテンツと色は、その時点でメンバーに付いているロールから決める。
+ * wants は、やりたいコンテンツで選んだもの（wantSummary.ts の loadWantSummary。なければ出さない）
+ */
+export const buildProfileEmbed = (member: GuildMember, profile: Profile, wants: string | null = null): EmbedBuilder => {
   const progress = findMemberProgress(member);
 
   return new EmbedBuilder()
@@ -67,6 +72,7 @@ export const buildProfileEmbed = (member: GuildMember, profile: Profile): EmbedB
       { name: CONTENT_FIELD, value: memberContentNames(member).join(JOB_SEPARATOR) || UNSET },
       // 任意なので、書いた人だけ出す
       ...(profile.recent ? [{ name: RECENT_FIELD, value: profile.recent }] : []),
+      ...(wants ? [{ name: WANT_FIELD, value: wants }] : []),
       ...(profile.x ? [{ name: X_FIELD, value: xLink(profile.x) }] : []),
       // 「いつでも誘って下さい」ロールを付けている人だけ（ひとことの欄は申請内容の読み取りに使うので、別の欄にする）
       ...(hasInviteMe(member) ? [{ name: INVITE_ME_FIELD, value: 'いつでも誘ってください！' }] : []),
@@ -131,10 +137,10 @@ export const buildJoinNoticeEmbed = (member: GuildMember): EmbedBuilder =>
 const findMemberProgress = (member: GuildMember): Role | undefined =>
   findProgressRoles(member.guild).find((role) => member.roles.cache.has(role.id));
 
-export const buildProfileMessage = (member: GuildMember, profile: Profile) => {
+export const buildProfileMessage = (member: GuildMember, profile: Profile, wants: string | null = null) => {
   return {
     content: profileHeader(member.id),
-    embeds: [buildProfileEmbed(member, profile)],
+    embeds: [buildProfileEmbed(member, profile, wants)],
     // メンションは表示だけにして、通知は飛ばさない
     allowedMentions: { parse: [] },
   };

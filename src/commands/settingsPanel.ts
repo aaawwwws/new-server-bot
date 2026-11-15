@@ -40,6 +40,7 @@ import { boldName } from '../names.js';
 import { OPEN_BUTTON_ID as HOUSING_OPEN_BUTTON_ID } from '../housing.js';
 import { MAINTENANCE_ROLE_NAME, OPEN_BUTTON_ID as MAINTENANCE_OPEN_BUTTON_ID } from '../maintenance.js';
 import { PICK_ID as WANT_OPEN_BUTTON_ID } from '../wantList.js';
+import { loadWantSummary } from '../wantSummary.js';
 import { OPEN_BUTTON_ID as SUBMARINE_OPEN_BUTTON_ID } from '../submarines.js';
 import { rememberPanel, type PanelPayload } from '../panels.js';
 import {
@@ -482,9 +483,10 @@ const openProfileMenu = async (interaction: ComponentInteraction): Promise<void>
       .setEmoji({ name: item.emoji })
       .setStyle(ButtonStyle.Secondary),
   );
+  const wants = await loadWantSummary(interaction.guild.id, interaction.user.id).catch(() => null);
   await show(interaction, {
-    content: '🪪 **プロフィールの設定**\n変更したい項目を選んでください。',
-    embeds: [buildProfileEmbed(interaction.member, current)],
+    content: '🪪 **プロフィールの設定**\n変更したい項目を選んでください（「✋ やりたいこと」は、パネルの「🎮 やりたいコンテンツ」で変えられます）。',
+    embeds: [buildProfileEmbed(interaction.member, current, wants)],
     components: toRows(buttons, MENU_BUTTONS_PER_ROW),
   });
 };
